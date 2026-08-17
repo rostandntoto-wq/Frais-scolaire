@@ -131,8 +131,8 @@
 
 <div id="app"></div>
 <div id="print-area"></div>
-<input type="file" id="import-input" accept=".xls,.xml,application/vnd.ms-excel,text/xml,application/json" style="display:none;">
-<input type="file" id="import-eleves-input" accept=".xls,.xml,.csv,application/vnd.ms-excel,text/xml,text/csv" style="display:none;">
+<input type="file" id="import-input" accept=".xlsx,.xls,.xml,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/xml,application/json" style="display:none;">
+<input type="file" id="import-eleves-input" accept=".xlsx,.xls,.xml,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/xml,text/csv" style="display:none;">
 
 <script>
 /* ---------------- données de départ (issues du fichier réel) ---------------- */
@@ -194,7 +194,7 @@ const APP_VERSION = "1.6.0";
 //     "changelog": "Description des nouveautés",
 //     "downloadUrl": "https://.../suivi-frais-scolaires.html" }
 // puis renseignez son adresse ci-dessous. Laissez vide pour désactiver.
-const UPDATE_CHECK_URL = "";
+const UPDATE_CHECK_URL = "https://rostandntoto-wq.github.io/Frais-scolaire/version.json";
 
 let state = {
   data: loadData(),
@@ -210,9 +210,11 @@ let state = {
   paiementsVisibleCount: 10,
   paiementsShowCancelled: true,
   journalVisibleCount: 20,
+  recettesDebut: "",
+  recettesFin: "",
   editingEleveId: null,
   selectedPaiements: new Set(),
-  currentUser: loadCurrentUser(),
+  currentUser: "",
   updateAvailable: null,
 };
 
@@ -221,16 +223,6 @@ let linkedFileName = "";
 let linkedFileStatus = ""; // "" | "saving" | "saved" | "error" | "conflict"
 let lastSyncedSnapshot = null; // dernier contenu écrit/lu du classeur lié (détection de conflit)
 
-const USER_STORAGE_KEY = "suivi-frais-scolaires-user";
-
-function loadCurrentUser(){
-  try{ return localStorage.getItem(USER_STORAGE_KEY) || ""; }
-  catch(e){ return ""; }
-}
-function saveCurrentUser(name){
-  state.currentUser = name;
-  try{ localStorage.setItem(USER_STORAGE_KEY, name); }catch(e){}
-}
 function getCurrentUser(){
   return (state.currentUser && state.currentUser.trim()) || "Utilisateur non identifié";
 }
@@ -254,8 +246,83 @@ function saveData(){
   }catch(e){
     // on ignore : le classeur lié (si présent) ou l'export manuel prennent le relais
   }
+  maybeAutoBackup();
   syncToLinkedFile();
   updateSaveNote();
+}
+
+/* ---------------- Sauvegardes automatiques (filet de sécurité local) ---------------- */
+const AUTOBACKUP_KEY = "suivi-frais-scolaires-autobackups";
+const AUTOBACKUP_MAX = 8;
+const AUTOBACKUP_MIN_INTERVAL_MS = 5 * 60 * 1000; // au plus une sauvegarde auto toutes les 5 min
+let lastAutoBackupAt = 0;
+
+function loadAutoBackups(){
+  try{ return JSON.parse(localStorage.getItem(AUTOBACKUP_KEY)) || []; }
+  catch(e){ return []; }
+}
+
+function maybeAutoBackup(){
+  const now = Date.now();
+  if(now - lastAutoBackupAt < AUTOBACKUP_MIN_INTERVAL_MS) return;
+  lastAutoBackupAt = now;
+  try{
+    const backups = loadAutoBackups();
+    backups.push({
+      ts: new Date().toISOString(),
+      nbEleves: state.data.eleves.length,
+      nbPaiements: state.data.paiements.length,
+      data: JSON.parse(JSON.stringify(state.data)),
+    });
+    while(backups.length > AUTOBACKUP_MAX) backups.shift();
+    localStorage.setItem(AUTOBACKUP_KEY, JSON.stringify(backups));
+  }catch(e){
+    // stockage plein ou indisponible — on n'interrompt pas l'utilisateur pour ça
+  }
+}
+
+function viewSauvegardes(){
+  const backups = loadAutoBackups().slice().reverse();
+  const rows = backups.map((b, i) => {
+    const idx = backups.length - 1 - i; // index réel dans le tableau non inversé
+    return `<tr>
+      <td>${formatDateTimeFr(b.ts)}</td>
+      <td class="right">${b.nbEleves}</td>
+      <td class="right">${b.nbPaiements}</td>
+      <td class="right"><button class="btn btn-outline" style="border-color:var(--line);color:var(--ink);" onclick="restaurerAutoBackup(${idx})">↩️ Restaurer</button></td>
+    </tr>`;
+  }).join("");
+
+  return `
+    <div class="title-row"><div>
+      <div class="eyebrow">Sécurité des données</div>
+      <h1 class="serif">Sauvegardes automatiques</h1>
+      <p class="subtitle">L'application enregistre automatiquement un instantané de vos données dans ce navigateur, au plus toutes les 5 minutes d'activité — jusqu'à ${AUTOBACKUP_MAX} versions conservées.</p>
+    </div></div>
+
+    <div class="warn">⚠️ Ces sauvegardes automatiques restent dans CE navigateur uniquement. Elles ne remplacent pas l'export régulier ni la liaison à un classeur Excel — utilisez-les en dernier recours.</div>
+
+    ${backups.length===0 ? emptyState("🛟","Aucune sauvegarde automatique pour l'instant","Une sauvegarde sera créée automatiquement au fil de votre utilisation de l'application.") : `
+      <div class="table-wrap"><table>
+        <thead><tr><th>Date &amp; heure</th><th class="right">Élèves</th><th class="right">Paiements</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    `}
+  `;
+}
+
+async function restaurerAutoBackup(index){
+  const backups = loadAutoBackups();
+  const b = backups[index];
+  if(!b) return;
+  if(!(await showConfirm(
+    `Restaurer l'état du ${formatDateTimeFr(b.ts)} (${b.nbEleves} élèves, ${b.nbPaiements} paiements) ?\n\nCela remplacera les données actuellement affichées. Vos modifications non sauvegardées depuis seront perdues.`,
+    {title:"Restaurer une sauvegarde automatique"}
+  ))) return;
+  state.data = JSON.parse(JSON.stringify(b.data));
+  journalAdd("Restauration d'une sauvegarde automatique", formatDateTimeFr(b.ts));
+  saveData(); render();
+  alert("Données restaurées depuis la sauvegarde du " + formatDateTimeFr(b.ts) + ".");
 }
 
 function updateSaveNote(){
@@ -284,19 +351,19 @@ async function syncToLinkedFile(){
     // l'écrase pas — on prévient plutôt que de perdre son travail.
     if(lastSyncedSnapshot !== null){
       const currentFile = await linkedFileHandle.getFile();
-      const currentText = await currentFile.text();
-      if(currentText !== lastSyncedSnapshot){
+      const currentBytes = new Uint8Array(await currentFile.arrayBuffer());
+      if(!bytesEqual(currentBytes, lastSyncedSnapshot)){
         linkedFileStatus = "conflict";
         updateSaveNote();
         render();
         return;
       }
     }
-    const xml = buildExcelWorkbook(state.data);
+    const bytes = buildXlsxWorkbook(state.data);
     const writable = await linkedFileHandle.createWritable();
-    await writable.write(xml);
+    await writable.write(bytes);
     await writable.close();
-    lastSyncedSnapshot = xml;
+    lastSyncedSnapshot = bytes;
     linkedFileStatus = "saved";
   }catch(e){
     linkedFileStatus = "error";
@@ -305,15 +372,46 @@ async function syncToLinkedFile(){
   updateSaveNote();
 }
 
+function bytesEqual(a, b){
+  if(!a || !b || a.length !== b.length) return false;
+  for(let i=0;i<a.length;i++) if(a[i] !== b[i]) return false;
+  return true;
+}
+
+// Lit un classeur quel que soit son format : .xlsx moderne (ZIP) en priorité,
+// avec repli automatique sur l'ancien format .xls (SpreadsheetML) pour les
+// classeurs liés avant la mise à jour vers .xlsx.
+function parseAnyWorkbook(bytes){
+  if(bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4B){ // signature ZIP "PK"
+    const result = parseXlsxWorkbook(bytes);
+    if(result && result.error === "compressed"){
+      return { error: "Ce fichier .xlsx a été enregistré avec compression (probablement réenregistré depuis Excel). Cette application ne peut relire que les classeurs qu'elle a elle-même générés, sans les réenregistrer depuis Excel. Réexportez une copie depuis l'application." };
+    }
+    if(!result) return { error: "Ce classeur .xlsx n'a pas la structure attendue." };
+    return { data: result };
+  }
+  const text = new TextDecoder("utf-8").decode(bytes);
+  if(text.indexOf("<?xml") === 0 || text.indexOf("<Workbook") !== -1){
+    const parsed = parseExcelWorkbook(text);
+    if(!parsed) return { error: "Ce classeur (ancien format .xls) n'a pas la structure attendue." };
+    return { data: parsed };
+  }
+  try{
+    return { data: JSON.parse(text) };
+  }catch(e){
+    return { error: "Format de fichier non reconnu." };
+  }
+}
+
 async function rechargerClasseurLie(){
   if(!linkedFileHandle) return;
   try{
     const file = await linkedFileHandle.getFile();
-    const text = await file.text();
-    const parsed = parseExcelWorkbook(text);
-    if(!parsed){ alert("Le contenu du classeur n'a pas pu être relu."); return; }
-    state.data = { ...state.data, ...parsed };
-    lastSyncedSnapshot = text;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const result = parseAnyWorkbook(bytes);
+    if(result.error){ alert(result.error); return; }
+    state.data = { ...state.data, ...result.data };
+    lastSyncedSnapshot = bytes;
     linkedFileStatus = "saved";
     render();
     alert("Dernière version du classeur rechargée. Vos modifications non enregistrées ont été remplacées par le contenu du fichier.");
@@ -329,8 +427,8 @@ async function creerClasseurLie(){
   }
   try{
     const handle = await window.showSaveFilePicker({
-      suggestedName: "frais-scolaires.xls",
-      types: [{ description: "Classeur Excel", accept: { "application/vnd.ms-excel": [".xls"] } }]
+      suggestedName: "REGISTRE_FRAIS_" + (state.data.ecole.anneeScolaire||"").replace(/[^\w-]/g,"") + ".xlsx",
+      types: [{ description: "Classeur Excel", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }]
     });
     linkedFileHandle = handle;
     linkedFileName = handle.name;
@@ -349,7 +447,10 @@ async function ouvrirClasseurLie(){
   }
   try{
     const [handle] = await window.showOpenFilePicker({
-      types: [{ description: "Classeur Excel", accept: { "application/vnd.ms-excel": [".xls"], "text/xml": [".xml"] } }]
+      types: [{ description: "Classeur Excel", accept: {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+        "application/vnd.ms-excel": [".xls"], "text/xml": [".xml"]
+      } }]
     });
     const perm = await handle.requestPermission({ mode: "readwrite" });
     if(perm !== "granted"){
@@ -357,16 +458,13 @@ async function ouvrirClasseurLie(){
       return;
     }
     const file = await handle.getFile();
-    const text = await file.text();
-    const parsed = parseExcelWorkbook(text);
-    if(!parsed){
-      alert("Ce fichier n'a pas la structure attendue (feuilles Info / Barème / Élèves / Paiements). Utilisez un classeur déjà exporté par cette application.");
-      return;
-    }
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const result = parseAnyWorkbook(bytes);
+    if(result.error){ alert(result.error); return; }
     linkedFileHandle = handle;
     linkedFileName = handle.name;
-    state.data = { ...state.data, ...parsed };
-    lastSyncedSnapshot = text;
+    state.data = { ...state.data, ...result.data };
+    lastSyncedSnapshot = bytes;
     saveData();
     render();
   }catch(e){
@@ -422,6 +520,82 @@ async function checkForUpdates(){
 function uid(prefix){
   return prefix + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2,7);
 }
+
+/* ---------------- Fenêtres de dialogue personnalisées (remplace confirm()/prompt()) ---------------- */
+function showModal({title, message, confirmLabel="Confirmer", cancelLabel="Annuler", danger=false, input=null}){
+  return new Promise(resolve => {
+    const old = document.getElementById("custom-modal-overlay");
+    if(old) old.remove();
+
+    const overlay = document.createElement("div");
+    overlay.id = "custom-modal-overlay";
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(30,42,74,0.55);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px;";
+
+    const box = document.createElement("div");
+    box.style.cssText = "background:white;border-radius:12px;max-width:440px;width:100%;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,0.35);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;";
+
+    const titleEl = document.createElement("div");
+    titleEl.style.cssText = `font-family:Georgia,serif;font-size:18px;font-weight:bold;color:${danger?"#A6432E":"#1E2A4A"};margin-bottom:10px;`;
+    titleEl.textContent = title || (danger ? "⚠️ Attention" : "Confirmation");
+    box.appendChild(titleEl);
+
+    if(message){
+      const msgEl = document.createElement("div");
+      msgEl.style.cssText = "font-size:13px;color:#333;line-height:1.6;white-space:pre-line;margin-bottom:16px;";
+      msgEl.textContent = message;
+      box.appendChild(msgEl);
+    }
+
+    let inputEl = null;
+    if(input){
+      const label = document.createElement("div");
+      label.style.cssText = "font-size:12px;color:#555;margin-bottom:6px;";
+      label.textContent = input.label || "Veuillez préciser le motif de cette opération (amende si nécessaire)";
+      box.appendChild(label);
+      inputEl = document.createElement("input");
+      inputEl.value = input.defaultValue || "";
+      inputEl.placeholder = input.placeholder || "";
+      inputEl.style.cssText = "width:100%;padding:8px 10px;border:1px solid #DDD2B4;border-radius:6px;font-size:13px;margin-bottom:16px;box-sizing:border-box;outline:none;";
+      box.appendChild(inputEl);
+    }
+
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:4px;";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = cancelLabel;
+    cancelBtn.style.cssText = "padding:9px 16px;border-radius:7px;border:1px solid #DDD2B4;background:white;color:#1E2A4A;font-size:13px;cursor:pointer;";
+
+    const confirmBtn = document.createElement("button");
+    confirmBtn.textContent = confirmLabel;
+    confirmBtn.style.cssText = `padding:9px 16px;border-radius:7px;border:none;background:${danger?"#A6432E":"#1E2A4A"};color:white;font-size:13px;font-weight:600;cursor:pointer;`;
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(confirmBtn);
+    box.appendChild(btnRow);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    if(inputEl){ inputEl.focus(); inputEl.select(); }
+    else confirmBtn.focus();
+
+    function cleanup(result){ overlay.remove(); resolve(result); }
+    cancelBtn.onclick = () => cleanup(input ? null : false);
+    confirmBtn.onclick = () => cleanup(input ? inputEl.value : true);
+    overlay.onclick = (e) => { if(e.target === overlay) cleanup(input ? null : false); };
+    document.addEventListener("keydown", function esc(e){
+      if(e.key === "Escape"){ document.removeEventListener("keydown", esc); cleanup(input ? null : false); }
+    });
+  });
+}
+
+function showConfirm(message, opts={}){
+  return showModal({ message, danger: true, confirmLabel: "Confirmer", cancelLabel: "Annuler", ...opts });
+}
+function showPrompt(message, defaultValue="", opts={}){
+  return showModal({ title: opts.title || "Motif de l'opération", input: { label: message, defaultValue }, confirmLabel: "Valider", ...opts });
+}
+
 
 function money(n){
   const v = Number(n) || 0;
@@ -556,6 +730,7 @@ function render(){
   const navItems = [
     ["paiements","🧾","Paiements"],
     ["dashboard","📊","Tableau de bord"],
+    ["recettes","📅","Recettes"],
     ["eleves","👥","Élèves"],
     ["journal","📜","Journal d'activité"],
     ["bareme","📘","Barème"],
@@ -575,11 +750,12 @@ function render(){
           <input class="brand-name" id="ecole-nom" value="${esc(d.ecole.nom)}" placeholder="Nom de l'école">
         </div>
       </div>
-      <div style="padding:10px 22px 14px;border-bottom:1px solid #33456b;">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.15em;opacity:.5;margin-bottom:4px;">Utilisateur actif</div>
-        <input id="current-user" value="${esc(state.currentUser)}" placeholder="Votre nom"
-          style="width:100%;background:#141d33;border:1px solid #33456b;border-radius:6px;color:var(--paper);font-size:13px;padding:6px 8px;outline:none;">
-        <div style="font-size:10px;opacity:.45;margin-top:4px;">Sert à identifier vos actions dans le journal</div>
+      <div style="padding:10px 22px 14px;border-bottom:1px solid #33456b;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.15em;opacity:.5;margin-bottom:3px;">Connecté</div>
+          <div style="font-size:13px;font-weight:600;">👤 ${esc(getCurrentUser())}</div>
+        </div>
+        <button class="side-link" style="padding:6px 10px;" title="Se déconnecter" onclick="logout()">🚪</button>
       </div>
       <nav>${navHtml}</nav>
       <div class="sidebar-footer">
@@ -597,9 +773,11 @@ function render(){
           <button class="side-link" onclick="ouvrirClasseurLie()">📂 Ouvrir un classeur existant</button>
         `}
         <div style="border-top:1px solid #33456b;margin:6px 0;"></div>
-        <button class="side-link" onclick="exportExcel()">📗 Exporter une copie (.xls)</button>
-        <button class="side-link" onclick="document.getElementById('import-input').click()">⬆️ Importer une copie (.xls)</button>
+        <button class="side-link" onclick="exportExcel()">📗 Exporter une copie (.xlsx)</button>
+        <button class="side-link" onclick="document.getElementById('import-input').click()">⬆️ Importer une copie (.xlsx)</button>
         <div style="border-top:1px solid #33456b;margin:6px 0;"></div>
+        <button class="side-link" onclick="setView('utilisateurs')">👤 Gérer les utilisateurs</button>
+        <button class="side-link" onclick="setView('sauvegardes')">🛟 Sauvegardes automatiques</button>
         <button class="side-link" onclick="checkForUpdates()">🔄 Vérifier les mises à jour</button>
         ${state.updateAvailable ? `
           <div style="margin:6px 14px;padding:8px 10px;background:#2f4a1e;border-radius:6px;font-size:11px;line-height:1.4;">
@@ -619,9 +797,6 @@ function render(){
     state.data.ecole.nom = e.target.value;
     saveData();
   });
-  document.getElementById("current-user").addEventListener("input", e => {
-    saveCurrentUser(e.target.value);
-  });
 
   updateSaveNote();
   renderView();
@@ -630,6 +805,9 @@ function render(){
 function renderView(){
   const root = document.getElementById("view-root");
   if(state.view === "journal") root.innerHTML = viewJournal();
+  if(state.view === "recettes") root.innerHTML = viewRecettes();
+  if(state.view === "utilisateurs") root.innerHTML = viewUtilisateurs();
+  if(state.view === "sauvegardes") root.innerHTML = viewSauvegardes();
   if(state.view === "dashboard") root.innerHTML = viewDashboard();
   if(state.view === "bareme") root.innerHTML = viewBareme();
   if(state.view === "eleves") root.innerHTML = viewEleves();
@@ -798,22 +976,23 @@ function setDashboardTrimestre(t){
   renderView();
 }
 
-function nouvelleAnneeScolaire(){
+async function nouvelleAnneeScolaire(){
   const d = state.data;
   const ancienneAnnee = d.ecole.anneeScolaire || "Année précédente";
   const matchYears = ancienneAnnee.match(/(\d{4}).*?(\d{4})/);
   const suggestion = matchYears ? `${Number(matchYears[1])+1}-${Number(matchYears[2])+1}` : "";
 
-  if(!confirm(
-    `Démarrer une nouvelle année scolaire ?\n\n` +
+  const ok = await showConfirm(
     `Ceci va :\n` +
     `• Archiver les données actuelles (${ancienneAnnee}) — élèves, barème et paiements\n` +
     `• Vider la liste des paiements pour repartir à zéro\n` +
     `• Conserver la liste des élèves (à vous de mettre à jour les classes)\n\n` +
-    `Cette action est enregistrée dans le journal. Continuer ?`
-  )) return;
+    `Cette action est enregistrée dans le journal. Continuer ?`,
+    {title:"Démarrer une nouvelle année scolaire ?", confirmLabel:"Démarrer"}
+  );
+  if(!ok) return;
 
-  const nouvelleAnnee = prompt("Nom de la nouvelle année scolaire :", suggestion || ancienneAnnee);
+  const nouvelleAnnee = await showPrompt("Nom de la nouvelle année scolaire :", suggestion || ancienneAnnee, {title:"Nouvelle année scolaire"});
   if(!nouvelleAnnee || !nouvelleAnnee.trim()) return;
 
   if(!d.archives) d.archives = {};
@@ -881,6 +1060,124 @@ function showMoreJournal(){
   renderView();
 }
 
+/* ---------------- Recettes par période ---------------- */
+function moisFr(iso){
+  const noms = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+  const [y,m] = (iso||"").split("-");
+  if(!y||!m) return "—";
+  return `${noms[Number(m)-1]} ${y}`;
+}
+
+function viewRecettes(){
+  const d = state.data;
+  const actifs = d.paiements.filter(p => !p.annule);
+
+  const parMois = {};
+  actifs.forEach(p => {
+    const key = (p.date||"").slice(0,7); // AAAA-MM
+    if(!key) return;
+    if(!parMois[key]) parMois[key] = { total:0, n:0 };
+    parMois[key].total += Number(p.montant||0);
+    parMois[key].n++;
+  });
+  const moisTries = Object.keys(parMois).sort();
+
+  const totalPeriode = actifs
+    .filter(p => (!state.recettesDebut || p.date >= state.recettesDebut) && (!state.recettesFin || p.date <= state.recettesFin))
+    .reduce((s,p)=>s+Number(p.montant||0),0);
+
+  const rows = moisTries.map(key => {
+    const m = parMois[key];
+    return `<tr>
+      <td>${moisFr(key+"-01")}</td>
+      <td class="right">${m.n}</td>
+      <td class="right pos">${money(m.total)}</td>
+    </tr>`;
+  }).join("");
+
+  const totalGeneral = actifs.reduce((s,p)=>s+Number(p.montant||0),0);
+
+  return `
+    <div class="title-row"><div>
+      <div class="eyebrow">Encaissements</div>
+      <h1 class="serif">Recettes par période</h1>
+      <p class="subtitle">Vue d'ensemble des encaissements, mois par mois, et sur une période personnalisée.</p>
+    </div></div>
+
+    <div class="stats-grid" style="grid-template-columns:repeat(2,1fr);margin-bottom:24px;">
+      <div class="stat-card"><div class="stat-value serif pos">${money(totalGeneral)}</div><div class="stat-label">Total encaissé (toutes périodes)</div></div>
+      <div class="stat-card"><div class="stat-value serif">${actifs.length}</div><div class="stat-label">Paiements valides</div></div>
+    </div>
+
+    ${moisTries.length===0 ? emptyState("📅","Aucune recette enregistrée","Les paiements apparaîtront ici, regroupés par mois.") : `
+      <h2 style="font-size:13px;text-transform:uppercase;letter-spacing:.05em;opacity:.7;margin-bottom:10px;">Recettes par mois</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Mois</th><th class="right">Paiements</th><th class="right">Total encaissé</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    `}
+
+    <div class="form-card">
+      <div class="form-title">Période personnalisée</div>
+      <div class="form-row">
+        <div class="field"><label>Du</label><input type="date" id="recettes-debut" value="${esc(state.recettesDebut||"")}" onchange="onRecettesPeriode()"></div>
+        <div class="field"><label>Au</label><input type="date" id="recettes-fin" value="${esc(state.recettesFin||"")}" onchange="onRecettesPeriode()"></div>
+        <div class="field wide">
+          <label>Total sur cette période</label>
+          <div style="font-size:20px;font-weight:600;font-family:Georgia,serif;color:var(--paid);padding-top:4px;">${money(totalPeriode)}</div>
+        </div>
+        <button class="btn" onclick="printRecettes()">🖨️ Imprimer ce rapport</button>
+      </div>
+    </div>
+  `;
+}
+
+function onRecettesPeriode(){
+  state.recettesDebut = document.getElementById("recettes-debut").value;
+  state.recettesFin = document.getElementById("recettes-fin").value;
+  renderView();
+}
+
+function printRecettes(){
+  const d = state.data;
+  const actifs = d.paiements.filter(p => !p.annule);
+  const debut = state.recettesDebut;
+  const fin = state.recettesFin;
+  const filtres = actifs.filter(p => (!debut || p.date >= debut) && (!fin || p.date <= fin))
+    .sort((a,b) => (a.date||"").localeCompare(b.date||""));
+
+  const rows = filtres.map(p => {
+    const el = d.eleves.find(e=>e.id===p.eleveId);
+    return `<tr style="border-bottom:1px solid var(--line);">
+      <td style="padding:6px;">${receiptNumber(p.numero||0)}</td>
+      <td style="padding:6px;">${dateFr(p.date)}</td>
+      <td style="padding:6px;">${el?esc(el.nom)+" "+esc(el.postnom):"—"}</td>
+      <td style="padding:6px;text-align:right;">${money(p.montant)}</td>
+    </tr>`;
+  }).join("");
+
+  const total = filtres.reduce((s,p)=>s+Number(p.montant||0),0);
+  const periodeLabel = (debut||fin) ? `du ${debut?dateFr(debut):"…"} au ${fin?dateFr(fin):"…"}` : "toutes périodes";
+
+  const html = `
+    <div style="font-family:Georgia,serif;color:var(--ink);padding:24px;">
+      ${printHeader(d, "Rapport des recettes — " + periodeLabel)}
+      <table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:16px;">
+        <thead><tr style="border-bottom:2px solid var(--ink);">
+          <th style="text-align:left;padding:6px;">Reçu</th><th style="text-align:left;padding:6px;">Date</th>
+          <th style="text-align:left;padding:6px;">Élève</th><th style="text-align:right;padding:6px;">Montant</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="border:2px solid var(--ink);border-radius:6px;padding:14px;">
+        <div style="display:flex;justify-content:space-between;font-size:20px;font-weight:bold;">
+          <span>TOTAL</span><span>${money(total)}</span>
+        </div>
+      </div>
+    </div>`;
+  doPrint(html);
+}
+
 /* ---------------- Barème ---------------- */
 function viewBareme(){
   const d = state.data;
@@ -935,10 +1232,10 @@ function updateBareme(id, field, value){
   }
 }
 
-function removeBareme(id){
+async function removeBareme(id){
   const opt = state.data.bareme.find(b=>b.id===id);
   const used = opt && state.data.eleves.some(e => e.option === opt.option);
-  if(used && !confirm("Des élèves utilisent cette option. La supprimer quand même ?")) return;
+  if(used && !(await showConfirm("Des élèves utilisent cette option. La supprimer quand même ?"))) return;
   state.data.bareme = state.data.bareme.filter(b => b.id!==id);
   if(opt) journalAdd("Suppression option barème", opt.option);
   saveData(); renderView();
@@ -1106,10 +1403,10 @@ function updateEleve(id, field, value){
   }
 }
 
-function archiverEleve(id){
+async function archiverEleve(id){
   const el = state.data.eleves.find(e=>e.id===id);
   if(!el) return;
-  const motif = prompt("Motif (sortie, transfert, autre) — facultatif :", "Sortie");
+  const motif = await showPrompt("Motif de l'archivage (sortie, transfert, autre) — facultatif :", "Sortie", {title:"Archiver cet élève"});
   if(motif === null) return; // annulé
   el.archive = true;
   el.archiveMotif = motif || "";
@@ -1132,24 +1429,42 @@ function toggleShowArchivedEleves(){
   renderView();
 }
 
-function removeEleve(id){
+async function removeEleve(id){
   const el = state.data.eleves.find(e=>e.id===id);
-  if(!confirm("Supprimer DÉFINITIVEMENT cet élève et tous ses paiements ?\n\nPréférez \u00ab Archiver \u00bb (sortie/transfert) si l'élève a simplement quitté l'école — cela garde son historique.")) return;
+  if(!(await showConfirm("Supprimer DÉFINITIVEMENT cet élève et tous ses paiements ?\n\nPréférez \u00ab Archiver \u00bb (sortie/transfert) si l'élève a simplement quitté l'école — cela garde son historique.", {title:"Suppression définitive"}))) return;
   state.data.eleves = state.data.eleves.filter(e=>e.id!==id);
   state.data.paiements = state.data.paiements.filter(p=>p.eleveId!==id);
   if(el) journalAdd("Suppression définitive élève", `${el.nom} ${el.postnom} ${el.prenom}`);
   saveData(); renderView();
 }
 
-function addEleve(){
+async function addEleve(){
   const nom = document.getElementById("ne-nom").value.trim();
   const classe = document.getElementById("ne-classe").value.trim();
+  const postnom = document.getElementById("ne-postnom").value.trim();
+  const prenom = document.getElementById("ne-prenom").value.trim();
   if(!nom || !classe) return;
+
+  // Détection de doublon : même nom + post-nom + classe déjà présents
+  const doublon = state.data.eleves.find(e =>
+    !e.archive &&
+    e.nom.trim().toLowerCase() === nom.toLowerCase() &&
+    (e.postnom||"").trim().toLowerCase() === postnom.toLowerCase() &&
+    e.classe.trim().toLowerCase() === classe.toLowerCase()
+  );
+  if(doublon){
+    const continuer = await showConfirm(
+      `Un élève \u00ab ${doublon.nom} ${doublon.postnom} \u00bb existe déjà dans la classe ${doublon.classe}.\n\nVoulez-vous quand même ajouter cette nouvelle fiche (élève homonyme) ?`,
+      {title:"⚠️ Doublon possible", confirmLabel:"Ajouter quand même"}
+    );
+    if(!continuer) return;
+  }
+
   state.data.eleves.push({
     id: uid("el"),
     nom,
-    postnom: document.getElementById("ne-postnom").value.trim(),
-    prenom: document.getElementById("ne-prenom").value.trim(),
+    postnom,
+    prenom,
     sexe: document.getElementById("ne-sexe").value,
     classe,
     option: document.getElementById("ne-option").value,
@@ -1216,21 +1531,27 @@ document.getElementById("import-eleves-input").addEventListener("change", e => {
   const reader = new FileReader();
   reader.onload = () => {
     try{
-      const text = reader.result;
+      const bytes = new Uint8Array(reader.result);
       let nouveaux = null;
 
-      if(text.indexOf("<?xml") === 0 || text.indexOf("<Workbook") !== -1){
-        const doc = new DOMParser().parseFromString(text, "text/xml");
-        if(!doc.getElementsByTagName("parsererror").length){
-          const rows = sheetToRows(doc, "Élèves");
-          nouveaux = rows.length ? rowsToEleves(rows) : null;
+      if(bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4B){ // .xlsx (ZIP)
+        const result = parseXlsxWorkbook(bytes);
+        if(result && result.error === "compressed"){
+          alert("Ce fichier .xlsx a été enregistré avec compression (probablement réenregistré depuis Excel) — cette application ne peut pas encore le relire directement.\n\nUtilisez un classeur généré par cette application, ou un fichier .csv.");
+          e.target.value = ""; return;
         }
-      } else if(text.slice(0,2) === "PK"){
-        alert("Ce fichier est un .xlsx Excel standard (format compressé) — cette application ne peut pas encore le lire directement.\n\nOuvrez-le dans Excel, faites \"Enregistrer sous\" → Classeur XML 2003 (.xml), puis importez ce fichier. Ou utilisez un fichier .csv.");
-        e.target.value = "";
-        return;
+        nouveaux = (result && result.eleves && result.eleves.length) ? result.eleves.map(e => ({...e, id: uid("el")})) : null;
       } else {
-        nouveaux = rowsToEleves(parseCsv(text));
+        const text = new TextDecoder("utf-8").decode(bytes);
+        if(text.indexOf("<?xml") === 0 || text.indexOf("<Workbook") !== -1){
+          const doc = new DOMParser().parseFromString(text, "text/xml");
+          if(!doc.getElementsByTagName("parsererror").length){
+            const rows = sheetToRows(doc, "Élèves");
+            nouveaux = rows.length ? rowsToEleves(rows) : null;
+          }
+        } else {
+          nouveaux = rowsToEleves(parseCsv(text));
+        }
       }
 
       if(!nouveaux){
@@ -1254,7 +1575,7 @@ document.getElementById("import-eleves-input").addEventListener("change", e => {
     }
     e.target.value = "";
   };
-  reader.readAsText(file);
+  reader.readAsArrayBuffer(file);
 });
 
 /* ---------------- Paiements ---------------- */
@@ -1319,6 +1640,7 @@ function viewPaiements(){
       <td style="opacity:.7;">${esc(p.payeur)}</td>
       <td class="right" style="white-space:nowrap;">
         <button class="icon-btn" title="Imprimer le reçu" onclick="printReceipt('${p.id}')">🖨️</button>
+        <button class="icon-btn" title="Télécharger en PDF" onclick="downloadReceiptPdf('${p.id}')">⬇️</button>
         <button class="icon-btn" title="Annuler ce reçu" onclick="annulerPaiement('${p.id}')">🚫</button>
       </td>
     </tr>`;
@@ -1579,34 +1901,76 @@ function onPaiementEleveInput(){
 
 function onPaiementClasseFiltre(v){ state.paiementClasseFiltre = v; state.paiementsVisibleCount = 10; renderView(); }
 
-function addPaiement(){
+async function addPaiement(){
   const nameVal = document.getElementById("np-eleve-name").value;
   const el = findEleveByTypedName(nameVal);
   const montant = Number(document.getElementById("np-montant").value) || 0;
+  const trimestre = Number(document.getElementById("np-trimestre").value);
+  const date = document.getElementById("np-date").value;
   if(!el){ alert("Élève introuvable. Vérifiez l'orthographe ou choisissez un nom proposé dans la liste."); return; }
   if(!montant) return;
+
+  // ---- Contrôle d'intégrité : dépassement du solde du trimestre ----
+  const due = tarifPourEleve(state.data.bareme, el, trimestre);
+  const payMap = paiementsParEleve(state.data.paiements);
+  const dejaEncaisse = payeTotal(payMap, el.id, trimestre);
+  const solde = due - dejaEncaisse;
+  if(due > 0 && montant > solde){
+    const depassement = montant - solde;
+    const ok = await showModal({
+      title: "⚠️ ATTENTION",
+      danger: true,
+      confirmLabel: "Confirmer quand même",
+      cancelLabel: "Annuler",
+      message:
+        `Élève           : ${el.nom} ${el.postnom} ${el.prenom}\n` +
+        `Trimestre       : T${trimestre}\n` +
+        `Montant dû      : ${money(due)}\n` +
+        `Déjà encaissé   : ${money(dejaEncaisse)}\n` +
+        `Solde           : ${money(Math.max(0,solde))}\n` +
+        `Nouveau paiement: ${money(montant)}\n\n` +
+        `Le montant dépasse le solde de ${money(depassement)}.`
+    });
+    if(!ok) return;
+  }
+
+  // ---- Détection de doublon : même élève, trimestre, montant et date ----
+  const doublon = state.data.paiements.find(p =>
+    !p.annule && p.eleveId===el.id && Number(p.trimestre)===trimestre &&
+    Number(p.montant)===montant && p.date===date
+  );
+  if(doublon){
+    const continuer = await showConfirm(
+      `Un paiement identique existe déjà pour cet élève :\n\n` +
+      `Reçu ${receiptNumber(doublon.numero)} — T${trimestre} — ${money(montant)} — ${dateFr(date)}\n\n` +
+      `Voulez-vous quand même enregistrer ce nouveau paiement ?`,
+      {title:"⚠️ Doublon possible", confirmLabel:"Enregistrer quand même"}
+    );
+    if(!continuer) return;
+  }
+
   const numero = nextReceiptNumber();
   state.data.paiements.push({
     id: uid("pay"),
     numero,
     eleveId: el.id,
-    trimestre: Number(document.getElementById("np-trimestre").value),
-    date: document.getElementById("np-date").value,
+    trimestre,
+    date,
     montant,
     payeur: document.getElementById("np-payeur").value,
     obs: document.getElementById("np-obs").value,
     annule: false,
   });
-  journalAdd("Encaissement", `Reçu ${receiptNumber(numero)} — ${el.nom} ${el.postnom} — ${money(montant)} (T${document.getElementById("np-trimestre").value})`);
+  journalAdd("Encaissement", `Reçu ${receiptNumber(numero)} — ${el.nom} ${el.postnom} — ${money(montant)} (T${trimestre})`);
   saveData(); renderView();
 }
 
-function annulerPaiement(id){
+async function annulerPaiement(id){
   const p = state.data.paiements.find(x=>x.id===id);
   if(!p) return;
   const el = state.data.eleves.find(e=>e.id===p.eleveId);
-  if(!confirm(`Annuler le reçu ${receiptNumber(p.numero)} (${money(p.montant)}) ?\n\nLe reçu reste visible dans l'historique, marqué \u00ab ANNULÉ \u00bb — il ne compte plus dans les totaux encaissés.`)) return;
-  const motif = prompt("Motif de l'annulation (facultatif) :", "");
+  if(!(await showConfirm(`Annuler le reçu ${receiptNumber(p.numero)} (${money(p.montant)}) ?\n\nLe reçu reste visible dans l'historique, marqué \u00ab ANNULÉ \u00bb — il ne compte plus dans les totaux encaissés.`, {title:"Annulation de reçu"}))) return;
+  const motif = await showPrompt("Motif de l'annulation — facultatif :", "", {title:"Annuler ce reçu"});
   p.annule = true;
   p.annulePar = getCurrentUser();
   p.annuleLe = new Date().toISOString();
@@ -1620,6 +1984,133 @@ function doPrint(html){
   document.getElementById("print-area").innerHTML = html;
   setTimeout(() => window.print(), 80);
 }
+
+/* ---------------- Génération de PDF (sans bibliothèque externe) ---------------- */
+function pdfEscapeText(str){
+  // normalise les espaces "fines" utilisées par toLocaleString (non représentables en Latin-1)
+  let normalized = String(str).replace(/[\u202F\u00A0\u2009]/g, " ");
+  let out = "";
+  for(const ch of normalized){
+    const code = ch.codePointAt(0);
+    out += code <= 255 ? ch : "?";
+  }
+  return out.replace(/\\/g,"\\\\").replace(/\(/g,"\\(").replace(/\)/g,"\\)");
+}
+
+// ops: [{type:'text', x,y,size,bold,text,color:[r,g,b] 0-1}, {type:'rect',x,y,w,h,stroke:[r,g,b],lineWidth}, {type:'line',x1,y1,x2,y2,color:[r,g,b],lineWidth}]
+function buildPdfBytes(pageW, pageH, ops){
+  let content = "";
+  ops.forEach(op => {
+    if(op.type === "text"){
+      const c = op.color || [0.11,0.16,0.29];
+      content += `${c[0]} ${c[1]} ${c[2]} rg\nBT\n/${op.bold?"F2":"F1"} ${op.size||10} Tf\n${op.x} ${pageH-op.y} Td\n(${pdfEscapeText(op.text)}) Tj\nET\n`;
+    } else if(op.type === "rect"){
+      const c = op.stroke || [0.11,0.16,0.29];
+      content += `${c[0]} ${c[1]} ${c[2]} RG\n${op.lineWidth||1} w\n${op.x} ${pageH-op.y-op.h} ${op.w} ${op.h} re\nS\n`;
+    } else if(op.type === "line"){
+      const c = op.color || [0.11,0.16,0.29];
+      content += `${c[0]} ${c[1]} ${c[2]} RG\n${op.lineWidth||1} w\n${op.x1} ${pageH-op.y1} m\n${op.x2} ${pageH-op.y2} l\nS\n`;
+    }
+  });
+
+  const objects = [];
+  objects.push(`<< /Type /Catalog /Pages 2 0 R >>`);
+  objects.push(`<< /Type /Pages /Kids [3 0 R] /Count 1 >>`);
+  objects.push(`<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /MediaBox [0 0 ${pageW} ${pageH}] /Contents 4 0 R >>`);
+  const contentBytes = content;
+  objects.push(`<< /Length ${contentBytes.length} >>\nstream\n${contentBytes}endstream`);
+  objects.push(`<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>`);
+  objects.push(`<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>`);
+
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((obj, i) => {
+    offsets.push(pdf.length);
+    pdf += `${i+1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefStart = pdf.length;
+  pdf += `xref\n0 ${objects.length+1}\n0000000000 65535 f \n`;
+  for(let i=1;i<=objects.length;i++){
+    pdf += String(offsets[i]).padStart(10,"0") + " 00000 n \n";
+  }
+  pdf += `trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+
+  const bytes = new Uint8Array(pdf.length);
+  for(let i=0;i<pdf.length;i++) bytes[i] = pdf.charCodeAt(i) & 0xFF;
+  return bytes;
+}
+
+function downloadPdfBytes(bytes, filename){
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function receiptPdfOps(d, payment){
+  const el = d.eleves.find(e=>e.id===payment.eleveId);
+  const numero = receiptNumber(payment.numero || 0);
+  const ink = [0.118,0.165,0.290];
+  const gold = [0.722,0.525,0.231];
+  const paid = [0.184,0.420,0.310];
+  const late = [0.651,0.263,0.180];
+  const ops = [];
+  let y = 40;
+
+  ops.push({type:"text", x:180-((d.ecole.nom||"").length*3), y, size:14, bold:true, text:d.ecole.nom, color:ink}); y+=16;
+  ops.push({type:"text", x:60, y, size:9, text:d.ecole.adresse, color:ink}); y+=12;
+  ops.push({type:"text", x:60, y, size:9, text:`${d.ecole.telephone} - ${d.ecole.email}`, color:ink}); y+=12;
+  ops.push({type:"text", x:60, y, size:9, text:`Année scolaire ${d.ecole.anneeScolaire}`, color:ink}); y+=10;
+  ops.push({type:"line", x1:40, y1:y, x2:320, y2:y, color:ink, lineWidth:1.2}); y+=22;
+
+  ops.push({type:"text", x:40, y, size:14, bold:true, text:`REÇU N° ${numero}`, color:ink});
+  ops.push({type:"text", x:250, y, size:10, text:dateFr(payment.date), color:ink}); y+=24;
+
+  const champs = [
+    ["Élève", el ? `${el.nom} ${el.postnom} ${el.prenom}` : "-"],
+    ["Classe / Option", el ? `${el.classe} - ${el.option}` : "-"],
+    ["Trimestre", `T${payment.trimestre}`],
+    ["Payeur", payment.payeur || ""],
+  ];
+  if(payment.obs) champs.push(["Observation", payment.obs]);
+  champs.forEach(([label,val]) => {
+    ops.push({type:"text", x:40, y, size:10, text:label, color:[0.4,0.4,0.4]});
+    ops.push({type:"text", x:200, y, size:10, text:String(val), color:ink});
+    y += 16;
+  });
+  y += 6;
+
+  if(payment.annule){
+    ops.push({type:"rect", x:40, y:y-14, w:280, h:26, stroke:late, lineWidth:1.5});
+    ops.push({type:"text", x:130, y:y+4, size:14, bold:true, text:"ANNULÉ", color:late});
+    y += 34;
+  }
+
+  ops.push({type:"rect", x:40, y:y-16, w:280, h:30, stroke:ink, lineWidth:1});
+  ops.push({type:"text", x:50, y:y+3, size:13, bold:true, text:"Montant versé", color:ink});
+  ops.push({type:"text", x:230, y:y+3, size:13, bold:true, text:money(payment.montant), color:paid});
+  y += 50;
+
+  ops.push({type:"line", x1:60, y1:y+30, x2:150, y2:y+30, color:ink, lineWidth:0.8});
+  ops.push({type:"text", x:60, y:y+42, size:8, text:"Signature du payeur", color:ink});
+  ops.push({type:"line", x1:200, y1:y+30, x2:290, y2:y+30, color:ink, lineWidth:0.8});
+  ops.push({type:"text", x:200, y:y+42, size:8, text:"Signature du caissier", color:ink});
+
+  return ops;
+}
+
+function downloadReceiptPdf(paymentId){
+  const d = state.data;
+  const payment = d.paiements.find(p=>p.id===paymentId);
+  if(!payment) return;
+  const ops = receiptPdfOps(d, payment);
+  const bytes = buildPdfBytes(360, 480, ops);
+  downloadPdfBytes(bytes, `recu-${receiptNumber(payment.numero||0)}.pdf`);
+}
+
 
 function receiptCardHtml(d, payment, compact){
   const el = d.eleves.find(e=>e.id===payment.eleveId);
@@ -1828,6 +2319,359 @@ function xmlSheet(name, rows){
   return `<Worksheet ss:Name="${esc(name)}"><Table>${rows.join("")}</Table></Worksheet>`;
 }
 
+/* ================================================================
+   Classeur .xlsx moderne (vrai format Office Open XML / ZIP)
+   Écrit à la main, sans bibliothèque externe — donc ça marche hors
+   ligne comme le reste de l'application. Les entrées ZIP sont
+   stockées sans compression (méthode "stored") : le fichier est un
+   peu plus volumineux, mais 100% valide et sans avertissement à
+   l'ouverture dans Excel, LibreOffice ou Google Sheets.
+   ================================================================ */
+
+/* ---- CRC32 (nécessaire pour le format ZIP) ---- */
+const CRC32_TABLE = (function(){
+  const table = new Uint32Array(256);
+  for(let n=0;n<256;n++){
+    let c = n;
+    for(let k=0;k<8;k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+function crc32(bytes){
+  let crc = 0xFFFFFFFF;
+  for(let i=0;i<bytes.length;i++) crc = CRC32_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+/* ---- Écriture ZIP minimale (méthode "stored", sans compression) ---- */
+function u16le(n){ return [n & 0xFF, (n>>8) & 0xFF]; }
+function u32le(n){ return [n & 0xFF, (n>>8) & 0xFF, (n>>16) & 0xFF, (n>>24) & 0xFF]; }
+function strToBytes(s){ const b = new Array(s.length); for(let i=0;i<s.length;i++) b[i] = s.charCodeAt(i) & 0xFF; return b; }
+// Encodage UTF-8 correct (indispensable pour les accents français dans le XML) —
+// strToBytes() ci-dessus ne convient qu'aux noms de fichiers ZIP, purement ASCII.
+function utf8Bytes(str){
+  const bytes = [];
+  for(let i=0;i<str.length;i++){
+    let code = str.codePointAt(i);
+    if(code > 0xFFFF) i++; // caractère sur paire de substituts (emoji, etc.)
+    if(code < 0x80){
+      bytes.push(code);
+    } else if(code < 0x800){
+      bytes.push(0xC0 | (code>>6), 0x80 | (code&0x3F));
+    } else if(code < 0x10000){
+      bytes.push(0xE0 | (code>>12), 0x80 | ((code>>6)&0x3F), 0x80 | (code&0x3F));
+    } else {
+      bytes.push(0xF0 | (code>>18), 0x80 | ((code>>12)&0x3F), 0x80 | ((code>>6)&0x3F), 0x80 | (code&0x3F));
+    }
+  }
+  return bytes;
+}
+
+function buildZip(files){
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  const dosTime = 0, dosDate = 0x21; // horodatage arbitraire (peu importe pour Excel)
+
+  files.forEach(f => {
+    const nameBytes = strToBytes(f.name);
+    const dataBytes = (typeof f.data === "string") ? new Uint8Array(utf8Bytes(f.data)) : f.data;
+    const crc = crc32(dataBytes);
+    const size = dataBytes.length;
+
+    const localHeader = new Uint8Array([
+      ...u32le(0x04034b50), ...u16le(20), ...u16le(0), ...u16le(0),
+      ...u16le(dosTime), ...u16le(dosDate),
+      ...u32le(crc), ...u32le(size), ...u32le(size),
+      ...u16le(nameBytes.length), ...u16le(0),
+    ]);
+    const localEntry = new Uint8Array(localHeader.length + nameBytes.length + dataBytes.length);
+    localEntry.set(localHeader, 0);
+    localEntry.set(nameBytes, localHeader.length);
+    localEntry.set(dataBytes, localHeader.length + nameBytes.length);
+    localParts.push(localEntry);
+
+    const centralHeader = new Uint8Array([
+      ...u32le(0x02014b50), ...u16le(20), ...u16le(20), ...u16le(0), ...u16le(0),
+      ...u16le(dosTime), ...u16le(dosDate),
+      ...u32le(crc), ...u32le(size), ...u32le(size),
+      ...u16le(nameBytes.length), ...u16le(0), ...u16le(0),
+      ...u16le(0), ...u16le(0), ...u32le(0),
+      ...u32le(offset),
+    ]);
+    const centralEntry = new Uint8Array(centralHeader.length + nameBytes.length);
+    centralEntry.set(centralHeader, 0);
+    centralEntry.set(nameBytes, centralHeader.length);
+    centralParts.push(centralEntry);
+
+    offset += localEntry.length;
+  });
+
+  const centralSize = centralParts.reduce((s,p)=>s+p.length, 0);
+  const centralOffset = offset;
+  const eocd = new Uint8Array([
+    ...u32le(0x06054b50), ...u16le(0), ...u16le(0),
+    ...u16le(files.length), ...u16le(files.length),
+    ...u32le(centralSize), ...u32le(centralOffset), ...u16le(0),
+  ]);
+
+  const total = offset + centralSize + eocd.length;
+  const result = new Uint8Array(total);
+  let pos = 0;
+  localParts.forEach(p => { result.set(p, pos); pos += p.length; });
+  centralParts.forEach(p => { result.set(p, pos); pos += p.length; });
+  result.set(eocd, pos);
+  return result;
+}
+
+/* ---- Lecture ZIP (entrées "stored" uniquement — voir parseXlsxWorkbook) ---- */
+function readU16(bytes, off){ return bytes[off] | (bytes[off+1]<<8); }
+function readU32(bytes, off){ return (bytes[off] | (bytes[off+1]<<8) | (bytes[off+2]<<16) | (bytes[off+3]<<24)) >>> 0; }
+function bytesToStr(bytes){ let s=""; for(let i=0;i<bytes.length;i++) s += String.fromCharCode(bytes[i]); return s; }
+
+function unzipStored(bytes){
+  let eocdOff = -1;
+  const searchStart = Math.max(0, bytes.length - 22 - 65557);
+  for(let i=bytes.length-22; i>=searchStart; i--){
+    if(readU32(bytes,i) === 0x06054b50){ eocdOff = i; break; }
+  }
+  if(eocdOff === -1) throw new Error("Archive ZIP invalide (fin introuvable).");
+  const totalEntries = readU16(bytes, eocdOff+10);
+  const centralDirOffset = readU32(bytes, eocdOff+16);
+
+  const entries = [];
+  let off = centralDirOffset;
+  for(let i=0;i<totalEntries;i++){
+    if(readU32(bytes, off) !== 0x02014b50) break;
+    const method = readU16(bytes, off+10);
+    const compSize = readU32(bytes, off+20);
+    const uncompSize = readU32(bytes, off+24);
+    const nameLen = readU16(bytes, off+28);
+    const extraLen = readU16(bytes, off+30);
+    const commentLen = readU16(bytes, off+32);
+    const localHeaderOffset = readU32(bytes, off+42);
+    const name = bytesToStr(bytes.slice(off+46, off+46+nameLen));
+    entries.push({ name, method, compSize, uncompSize, localHeaderOffset });
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+
+  const hasCompressed = entries.some(e => e.method !== 0);
+  if(hasCompressed){
+    throw new Error("COMPRESSED");
+  }
+
+  const files = {};
+  entries.forEach(e => {
+    const lo = e.localHeaderOffset;
+    if(readU32(bytes, lo) !== 0x04034b50) return;
+    const nameLen = readU16(bytes, lo+26);
+    const extraLen = readU16(bytes, lo+28);
+    const dataStart = lo + 30 + nameLen + extraLen;
+    files[e.name] = bytes.slice(dataStart, dataStart + e.compSize);
+  });
+  return files;
+}
+
+/* ---- Génération des parties XML (Office Open XML) ---- */
+function colLetter(n){
+  let s = "", num = n+1;
+  while(num > 0){
+    const rem = (num-1) % 26;
+    s = String.fromCharCode(65+rem) + s;
+    num = Math.floor((num-1)/26);
+  }
+  return s;
+}
+function xlsxCell(colIdx, rowNum, cell){
+  const ref = colLetter(colIdx) + rowNum;
+  if(cell.isNumber){
+    return `<c r="${ref}"><v>${Number(cell.value)||0}</v></c>`;
+  }
+  const val = cell.value === undefined || cell.value === null ? "" : String(cell.value);
+  if(val === "") return `<c r="${ref}"/>`;
+  return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${esc(val)}</t></is></c>`;
+}
+function xlsxSheetXml(rows){
+  const rowsXml = rows.map((cells, i) => {
+    const rowNum = i+1;
+    const cellsXml = cells.map((c, ci) => xlsxCell(ci, rowNum, c)).join("");
+    return `<row r="${rowNum}">${cellsXml}</row>`;
+  }).join("");
+  const nCols = rows.reduce((m,r) => Math.max(m, r.length), 1);
+  const cols = `<cols>${`<col min="1" max="${nCols}" width="22" customWidth="1"/>`}</cols>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${cols}<sheetData>${rowsXml}</sheetData></worksheet>`;
+}
+function xlsxContentTypesXml(nSheets){
+  let overrides = `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>`;
+  for(let i=1;i<=nSheets;i++) overrides += `<Override PartName="/xl/worksheets/sheet${i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${overrides}</Types>`;
+}
+function xlsxRootRelsXml(){
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
+}
+function xlsxWorkbookXml(sheetNames){
+  const tags = sheetNames.map((name,i) => `<sheet name="${esc(name)}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${tags}</sheets></workbook>`;
+}
+function xlsxWorkbookRelsXml(nSheets){
+  let rels = "";
+  for(let i=1;i<=nSheets;i++) rels += `<Relationship Id="rId${i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i}.xml"/>`;
+  rels += `<Relationship Id="rId${nSheets+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>`;
+}
+function xlsxStylesXml(){
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+}
+
+const XLSX_SHEET_NAMES = ["Paramètres","Barème","Élèves","Paiements","Journal","Archives"];
+
+function buildXlsxWorkbook(d){
+  const T = (v) => ({value:v});
+  const N = (v) => ({value:v, isNumber:true});
+
+  const paramRows = [
+    [T("Nom de l'école"), T(d.ecole.nom)],
+    [T("Adresse"), T(d.ecole.adresse)],
+    [T("Téléphone"), T(d.ecole.telephone)],
+    [T("Email"), T(d.ecole.email)],
+    [T("Année scolaire"), T(d.ecole.anneeScolaire)],
+    [T("Version de l'application"), T(APP_VERSION)],
+  ];
+
+  const baremeRows = [
+    [T("ID"),T("Option"),T("Tarif T1"),T("Tarif T2"),T("Tarif T3"),T("Tarif Enseignant T1"),T("Tarif Enseignant T2"),T("Tarif Enseignant T3")],
+    ...d.bareme.map(b => [T(b.id),T(b.option),N(b.t1),N(b.t2),N(b.t3),N(b.ens1),N(b.ens2),N(b.ens3)])
+  ];
+
+  const elevesRows = [
+    [T("ID"),T("Nom"),T("Post-nom"),T("Prénom"),T("Sexe"),T("Classe"),T("Option"),T("Statut"),T("Archivé"),T("Motif archivage")],
+    ...d.eleves.map(e => [T(e.id),T(e.nom),T(e.postnom),T(e.prenom),T(e.sexe),T(e.classe),T(e.option),T(e.statut),T(e.archive?"1":"0"),T(e.archiveMotif||"")])
+  ];
+
+  const paiementsRows = [
+    [T("Numéro"),T("ID"),T("ID Élève"),T("Trimestre"),T("Date"),T("Montant"),T("Payeur"),T("Observation"),T("Annulé"),T("Motif annulation")],
+    ...d.paiements.map(p => [N(p.numero||0),T(p.id),T(p.eleveId),N(p.trimestre),T(p.date),N(p.montant),T(p.payeur),T(p.obs),T(p.annule?"1":"0"),T(p.motifAnnulation||"")])
+  ];
+
+  const journalRows = [[T(JSON.stringify(d.journal || []))]];
+  const archivesRows = [[T(JSON.stringify(d.archives || {}))]];
+
+  const sheetsData = [paramRows, baremeRows, elevesRows, paiementsRows, journalRows, archivesRows];
+  const nSheets = XLSX_SHEET_NAMES.length;
+
+  const files = [
+    { name: "[Content_Types].xml", data: xlsxContentTypesXml(nSheets) },
+    { name: "_rels/.rels", data: xlsxRootRelsXml() },
+    { name: "xl/workbook.xml", data: xlsxWorkbookXml(XLSX_SHEET_NAMES) },
+    { name: "xl/_rels/workbook.xml.rels", data: xlsxWorkbookRelsXml(nSheets) },
+    { name: "xl/styles.xml", data: xlsxStylesXml() },
+  ];
+  sheetsData.forEach((rows, i) => {
+    files.push({ name: `xl/worksheets/sheet${i+1}.xml`, data: xlsxSheetXml(rows) });
+  });
+
+  return buildZip(files);
+}
+
+/* ---- Lecture d'un .xlsx (relit ses propres fichiers ; voir limite ci-dessous) ---- */
+function parseXlsxSheetXml(xml){
+  const rows = [];
+  const rowRe = /<row[^>]*>([\s\S]*?)<\/row>/g;
+  let rm;
+  while((rm = rowRe.exec(xml))){
+    const rowXml = rm[1];
+    const cellRe = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+    let cm;
+    const byCol = {};
+    let maxCol = -1;
+    while((cm = cellRe.exec(rowXml))){
+      const attrs = cm[1] || "";
+      const inner = cm[2] || "";
+      const refMatch = attrs.match(/r="([A-Z]+)(\d+)"/);
+      if(!refMatch) continue;
+      const colIdx = xlsxColToIndex(refMatch[1]);
+      const typeMatch = attrs.match(/t="([^"]+)"/);
+      let value = "";
+      if(typeMatch && typeMatch[1] === "inlineStr"){
+        const tMatch = inner.match(/<t[^>]*>([\s\S]*?)<\/t>/);
+        value = tMatch ? xmlUnescapeText(tMatch[1]) : "";
+      } else {
+        const vMatch = inner.match(/<v>([\s\S]*?)<\/v>/);
+        value = vMatch ? vMatch[1] : "";
+      }
+      byCol[colIdx] = value;
+      if(colIdx > maxCol) maxCol = colIdx;
+    }
+    const arr = [];
+    for(let i=0;i<=maxCol;i++) arr.push(byCol[i] !== undefined ? byCol[i] : "");
+    rows.push(arr);
+  }
+  return rows;
+}
+function xlsxColToIndex(letters){
+  let idx = 0;
+  for(let i=0;i<letters.length;i++) idx = idx*26 + (letters.charCodeAt(i) - 64);
+  return idx - 1;
+}
+function xmlUnescapeText(s){
+  return s.replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&amp;/g,"&");
+}
+
+// Limite assumée : on relit les feuilles dans l'ordre fixe où l'application les
+// écrit (Paramètres, Barème, Élèves, Paiements, Journal, Archives). Si le
+// classeur a été réenregistré depuis Excel avec compression, ou si les
+// feuilles ont été réordonnées manuellement, la lecture peut échouer —
+// dans ce cas, un message clair l'explique plutôt que de risquer une
+// lecture incorrecte des données financières.
+function parseXlsxWorkbook(bytes){
+  let files;
+  try{
+    files = unzipStored(bytes);
+  }catch(e){
+    if(e.message === "COMPRESSED") return { error: "compressed" };
+    return null;
+  }
+
+  const sheetsXml = [];
+  for(let i=1;i<=XLSX_SHEET_NAMES.length;i++){
+    const name = `xl/worksheets/sheet${i}.xml`;
+    if(!files[name]) return null;
+    sheetsXml.push(new TextDecoder("utf-8").decode(files[name]));
+  }
+  const [paramRows, baremeRows, elevesRows, paiementsRows, journalRows, archivesRows] = sheetsXml.map(parseXlsxSheetXml);
+
+  const ecole = { nom:"", adresse:"", telephone:"", email:"", anneeScolaire:"" };
+  const map = { "Nom de l'école":"nom", "Adresse":"adresse", "Téléphone":"telephone", "Email":"email", "Année scolaire":"anneeScolaire" };
+  paramRows.forEach(r => { if(map[r[0]]) ecole[map[r[0]]] = r[1] || ""; });
+
+  const bareme = baremeRows.slice(1).filter(r=>r[0]).map(r => ({
+    id: r[0], option: r[1]||"",
+    t1: Number(r[2])||0, t2: Number(r[3])||0, t3: Number(r[4])||0,
+    ens1: Number(r[5])||0, ens2: Number(r[6])||0, ens3: Number(r[7])||0,
+  }));
+
+  const eleves = elevesRows.slice(1).filter(r=>r[0]).map(r => ({
+    id: r[0], nom: r[1]||"", postnom: r[2]||"", prenom: r[3]||"",
+    sexe: r[4]||"M", classe: r[5]||"", option: r[6]||"", statut: r[7]||"Normal",
+    archive: r[8] === "1", archiveMotif: r[9]||"",
+  }));
+
+  const paiements = paiementsRows.slice(1).filter(r=>r[1]).map(r => ({
+    numero: Number(r[0])||0, id: r[1], eleveId: r[2]||"", trimestre: Number(r[3])||1, date: r[4]||"",
+    montant: Number(r[5])||0, payeur: r[6]||"", obs: r[7]||"",
+    annule: r[8] === "1", motifAnnulation: r[9]||"",
+  }));
+
+  let journal = [];
+  try{ if(journalRows[0] && journalRows[0][0]) journal = JSON.parse(journalRows[0][0]); }catch(e){}
+  let archives = {};
+  try{ if(archivesRows[0] && archivesRows[0][0]) archives = JSON.parse(archivesRows[0][0]); }catch(e){}
+
+  if(bareme.length===0 && eleves.length===0 && paiements.length===0 && !ecole.nom) return null;
+  return { ecole, bareme, eleves, paiements, journal, archives };
+}
+
 function buildExcelWorkbook(d){
   const infoRows = [
     xmlRow([["String","Nom de l'école"],["String", d.ecole.nom]]),
@@ -1886,12 +2730,12 @@ ${xmlSheet("Archives", archivesRows)}
 }
 
 function exportExcel(){
-  const xml = buildExcelWorkbook(state.data);
-  const blob = new Blob([xml], {type:"application/vnd.ms-excel"});
+  const bytes = buildXlsxWorkbook(state.data);
+  const blob = new Blob([bytes], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "frais-scolaires-" + new Date().toISOString().slice(0,10) + ".xls";
+  a.download = "REGISTRE_FRAIS_" + (state.data.ecole.anneeScolaire||"").replace(/[^\w-]/g,"") + ".xlsx";
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -1972,26 +2816,11 @@ document.getElementById("import-input").addEventListener("change", e => {
   const reader = new FileReader();
   reader.onload = () => {
     try{
-      const text = reader.result;
-      let parsed = null;
+      const bytes = new Uint8Array(reader.result);
+      const result = parseAnyWorkbook(bytes);
+      if(result.error){ alert(result.error); e.target.value=""; return; }
 
-      if(text.slice(0,2) === "PK"){
-        alert("Ce fichier est un .xlsx Excel standard (format compressé) — cette application ne peut pas encore le lire directement.\n\nUtilisez plutôt un classeur exporté par cette application (.xls), ou \"Ouvrir un classeur existant\" pour la liaison directe.");
-        e.target.value = "";
-        return;
-      }
-
-      // classeur Excel (SpreadsheetML) ?
-      if(text.indexOf("<?xml") === 0 || text.indexOf("<Workbook") !== -1){
-        parsed = parseExcelWorkbook(text);
-        if(!parsed){ alert("Ce classeur Excel n'a pas le format attendu (feuilles Info / Barème / Élèves / Paiements)."); e.target.value=""; return; }
-      } else {
-        // ancienne sauvegarde JSON, encore prise en charge
-        try{ parsed = JSON.parse(text); }
-        catch(err){ alert("Fichier illisible : ni classeur Excel, ni sauvegarde JSON reconnue."); e.target.value=""; return; }
-      }
-
-      state.data = { ...state.data, ...parsed };
+      state.data = { ...state.data, ...result.data };
       journalAdd("Import classeur", `Copie importée depuis ${file.name}`);
       saveData(); render();
       alert("Données importées avec succès.");
@@ -2001,12 +2830,230 @@ document.getElementById("import-input").addEventListener("change", e => {
     }
     e.target.value = "";
   };
-  reader.readAsText(file);
+  reader.readAsArrayBuffer(file);
   e.target.value = "";
 });
 
+/* ---------------- Authentification (nom d'utilisateur + mot de passe) ---------------- */
+// Important : ces comptes sont stockés localement sur CET appareil/navigateur (jamais
+// dans le classeur partagé), pour ne pas exposer de mots de passe dans un fichier Excel
+// consultable par d'autres. Chaque poste de travail a donc ses propres comptes à créer.
+const AUTH_USERS_KEY = "suivi-frais-scolaires-auth-users";
+const AUTH_SESSION_KEY = "suivi-frais-scolaires-session";
+
+async function hashPassword(pw){
+  try{
+    const enc = new TextEncoder().encode(pw);
+    const buf = await crypto.subtle.digest("SHA-256", enc);
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+  }catch(e){
+    // repli très simple si l'API de chiffrement n'est pas disponible (navigateur ancien)
+    let h = 0;
+    for(let i=0;i<pw.length;i++){ h = ((h<<5)-h) + pw.charCodeAt(i); h |= 0; }
+    return "fallback-" + h;
+  }
+}
+
+function loadAuthUsers(){
+  try{ return JSON.parse(localStorage.getItem(AUTH_USERS_KEY)) || []; }
+  catch(e){ return []; }
+}
+function saveAuthUsers(users){
+  try{ localStorage.setItem(AUTH_USERS_KEY, JSON.stringify(users)); }catch(e){}
+}
+function getSession(){
+  try{ return sessionStorage.getItem(AUTH_SESSION_KEY) || ""; }catch(e){ return ""; }
+}
+function setSession(username){
+  try{
+    if(username) sessionStorage.setItem(AUTH_SESSION_KEY, username);
+    else sessionStorage.removeItem(AUTH_SESSION_KEY);
+  }catch(e){}
+}
+
+function authScreenHtml(mode, error){
+  const isSetup = mode === "setup";
+  return `
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--paper);padding:20px;">
+      <div style="max-width:360px;width:100%;background:white;border:1px solid var(--line);border-radius:14px;padding:32px;box-shadow:0 10px 40px rgba(30,42,74,0.12);">
+        <div style="text-align:center;margin-bottom:22px;">
+          <img src="${LOGO_DATA}" style="width:64px;height:64px;object-fit:contain;margin-bottom:10px;">
+          <div style="font-family:Georgia,serif;font-size:19px;font-weight:bold;color:var(--ink);">${isSetup ? "Créer le compte administrateur" : "Connexion"}</div>
+          <div style="font-size:12px;opacity:.6;margin-top:4px;">Registre des frais scolaires</div>
+        </div>
+        ${error ? `<div style="background:#A6432E15;color:var(--late);border-radius:8px;padding:8px 12px;font-size:12px;margin-bottom:14px;">${esc(error)}</div>` : ""}
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div>
+            <div style="font-size:11px;opacity:.6;margin-bottom:4px;">Nom d'utilisateur</div>
+            <input id="auth-username" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:7px;font-size:14px;box-sizing:border-box;" autocomplete="username">
+          </div>
+          <div>
+            <div style="font-size:11px;opacity:.6;margin-bottom:4px;">Mot de passe</div>
+            <input id="auth-password" type="password" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:7px;font-size:14px;box-sizing:border-box;" autocomplete="${isSetup?'new-password':'current-password'}">
+          </div>
+          ${isSetup ? `
+            <div>
+              <div style="font-size:11px;opacity:.6;margin-bottom:4px;">Confirmer le mot de passe</div>
+              <input id="auth-password2" type="password" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:7px;font-size:14px;box-sizing:border-box;" autocomplete="new-password">
+            </div>
+          ` : ""}
+          <button class="btn" style="margin-top:6px;justify-content:center;" onclick="${isSetup ? 'submitSetup()' : 'submitLogin()'}">${isSetup ? "Créer le compte et continuer" : "Se connecter"}</button>
+        </div>
+        <div style="font-size:10px;opacity:.45;margin-top:16px;text-align:center;line-height:1.5;">
+          Ces identifiants sont propres à cet appareil — ils ne sont jamais inclus dans le classeur Excel exporté ou lié.
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAuthScreen(mode, error){
+  document.getElementById("app").innerHTML = authScreenHtml(mode, error);
+  const onEnter = (fn) => (e) => { if(e.key === "Enter") fn(); };
+  const pwField = document.getElementById(mode==="setup" ? "auth-password2" : "auth-password");
+  if(pwField) pwField.addEventListener("keydown", onEnter(mode==="setup" ? submitSetup : submitLogin));
+  document.getElementById("auth-username").focus();
+}
+
+async function submitSetup(){
+  const username = document.getElementById("auth-username").value.trim();
+  const pw = document.getElementById("auth-password").value;
+  const pw2 = document.getElementById("auth-password2").value;
+  if(!username || !pw){ renderAuthScreen("setup", "Veuillez renseigner un nom d'utilisateur et un mot de passe."); return; }
+  if(pw.length < 4){ renderAuthScreen("setup", "Le mot de passe doit contenir au moins 4 caractères."); return; }
+  if(pw !== pw2){ renderAuthScreen("setup", "Les deux mots de passe ne correspondent pas."); return; }
+  const hash = await hashPassword(pw);
+  const users = [{ username, passwordHash: hash, role: "admin", createdAt: new Date().toISOString() }];
+  saveAuthUsers(users);
+  setSession(username);
+  state.currentUser = username;
+  journalAdd("Création du compte administrateur", username);
+  saveData();
+  initApp();
+}
+
+async function submitLogin(){
+  const username = document.getElementById("auth-username").value.trim();
+  const pw = document.getElementById("auth-password").value;
+  const users = loadAuthUsers();
+  const user = users.find(u => u.username.toLowerCase() === username.toLowerCase());
+  if(!user){ renderAuthScreen("login", "Nom d'utilisateur ou mot de passe incorrect."); return; }
+  const hash = await hashPassword(pw);
+  if(hash !== user.passwordHash){ renderAuthScreen("login", "Nom d'utilisateur ou mot de passe incorrect."); return; }
+  setSession(user.username);
+  state.currentUser = user.username;
+  journalAdd("Connexion", user.username);
+  saveData();
+  initApp();
+}
+
+function logout(){
+  journalAdd("Déconnexion", getCurrentUser());
+  saveData();
+  setSession("");
+  initApp();
+}
+
+/* ---------------- Gestion des utilisateurs (comptes locaux) ---------------- */
+function viewUtilisateurs(){
+  const users = loadAuthUsers();
+  const rows = users.map(u => `
+    <tr>
+      <td>${esc(u.username)}</td>
+      <td style="opacity:.7;">${esc(u.role||"utilisateur")}</td>
+      <td style="opacity:.6;">${formatDateTimeFr(u.createdAt)}</td>
+      <td class="right">
+        ${u.username === getCurrentUser() ? `<span style="font-size:11px;opacity:.5;">Vous</span>` : `<button class="icon-btn" onclick="deleteAuthUser('${esc(u.username)}')">🗑️</button>`}
+      </td>
+    </tr>`).join("");
+
+  return `
+    <div class="title-row"><div>
+      <div class="eyebrow">Sécurité</div>
+      <h1 class="serif">Gestion des utilisateurs</h1>
+      <p class="subtitle">Comptes propres à cet appareil. Chaque personne qui utilise ce poste devrait avoir son propre compte pour une traçabilité fiable.</p>
+    </div></div>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>Nom d'utilisateur</th><th>Rôle</th><th>Créé le</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+
+    <div class="form-card">
+      <div class="form-title">Ajouter un utilisateur</div>
+      <div class="form-row">
+        <div class="field"><label>Nom d'utilisateur</label><input id="nu-username"></div>
+        <div class="field"><label>Mot de passe</label><input id="nu-password" type="password"></div>
+        <button class="btn" onclick="addAuthUser()">➕ Ajouter</button>
+      </div>
+    </div>
+
+    <div class="form-card">
+      <div class="form-title">Changer mon mot de passe</div>
+      <div class="form-row">
+        <div class="field"><label>Nouveau mot de passe</label><input id="cp-password" type="password"></div>
+        <button class="btn" onclick="changeMyPassword()">🔑 Mettre à jour</button>
+      </div>
+    </div>
+  `;
+}
+
+async function addAuthUser(){
+  const username = document.getElementById("nu-username").value.trim();
+  const pw = document.getElementById("nu-password").value;
+  if(!username || !pw){ alert("Nom d'utilisateur et mot de passe requis."); return; }
+  if(pw.length < 4){ alert("Le mot de passe doit contenir au moins 4 caractères."); return; }
+  const users = loadAuthUsers();
+  if(users.some(u => u.username.toLowerCase() === username.toLowerCase())){ alert("Ce nom d'utilisateur existe déjà."); return; }
+  const hash = await hashPassword(pw);
+  users.push({ username, passwordHash: hash, role: "utilisateur", createdAt: new Date().toISOString() });
+  saveAuthUsers(users);
+  journalAdd("Création d'un compte utilisateur", username);
+  saveData();
+  renderView();
+}
+
+async function deleteAuthUser(username){
+  if(!(await showConfirm(`Supprimer le compte \u00ab ${username} \u00bb de cet appareil ?`, {title:"Supprimer un utilisateur"}))) return;
+  const users = loadAuthUsers().filter(u => u.username !== username);
+  saveAuthUsers(users);
+  journalAdd("Suppression d'un compte utilisateur", username);
+  saveData();
+  renderView();
+}
+
+async function changeMyPassword(){
+  const pw = document.getElementById("cp-password").value;
+  if(!pw || pw.length < 4){ alert("Le mot de passe doit contenir au moins 4 caractères."); return; }
+  const users = loadAuthUsers();
+  const me = users.find(u => u.username === getCurrentUser());
+  if(!me) return;
+  me.passwordHash = await hashPassword(pw);
+  saveAuthUsers(users);
+  journalAdd("Changement de mot de passe", getCurrentUser());
+  saveData();
+  alert("Mot de passe mis à jour.");
+  renderView();
+}
+
+/* ---------------- Démarrage : vérifie l'authentification avant d'afficher l'app ---------------- */
+function initApp(){
+  const users = loadAuthUsers();
+  if(users.length === 0){
+    renderAuthScreen("setup");
+    return;
+  }
+  const session = getSession();
+  if(!session || !users.some(u => u.username === session)){
+    renderAuthScreen("login");
+    return;
+  }
+  state.currentUser = session;
+  render();
+}
+
 /* ---------------- démarrage ---------------- */
-render();
+initApp();
 </script>
 </body>
 </html>
