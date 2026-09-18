@@ -1284,10 +1284,7 @@ function render(){
   `;
 
   const initiale = (getCurrentUser()||"?").trim().charAt(0).toUpperCase();
-  const role = (() => {
-    try{ const u = loadAuthUsers().find(u=>u.username===getCurrentUser()); return u && u.role==="admin" ? "Administrateur" : "Utilisateur"; }
-    catch(e){ return "Utilisateur"; }
-  })();
+  const role = state.currentRole === "Admin" ? "Administrateur" : "Enseignant";
 
   document.getElementById("app").innerHTML = `
     <div class="sidebar-scrim ${state.sidebarOpenMobile?'show':''}" onclick="toggleMobileSidebar(false)"></div>
@@ -4098,7 +4095,7 @@ function authIcon(name, size){
 }
 
 function authScreenHtml(mode, error){
-  const isSetup = mode === "setup";
+  const isSetup = false;
   const isForgot = mode === "forgot";
   const ecoleNom = (state.data && state.data.ecole && state.data.ecole.nom) || "École";
   const anneeScolaire = (state.data && state.data.ecole && state.data.ecole.anneeScolaire) || "";
@@ -4142,24 +4139,16 @@ function authScreenHtml(mode, error){
         ${authIcon("key",44)}
         <div>
           <div style="font-family:Georgia,serif;font-size:20px;font-weight:bold;color:var(--ink);">Mot de passe oublié</div>
-          <div style="font-size:12.5px;opacity:.6;margin-top:2px;">Réinitialisez votre accès avec votre code de secours</div>
+          <div style="font-size:12.5px;opacity:.6;margin-top:2px;">Un lien de réinitialisation vous sera envoyé par e-mail</div>
         </div>
       </div>
       ${error ? `<div style="background:#A6432E15;color:var(--late);border-radius:8px;padding:9px 12px;font-size:12.5px;margin-bottom:16px;">${esc(error)}</div>` : ""}
       <div style="display:flex;flex-direction:column;gap:14px;">
         <div>
-          <div style="font-size:12.5px;font-weight:600;color:var(--ink);margin-bottom:5px;">Nom d'utilisateur</div>
-          <div class="auth-field">${authIcon("user")}<input id="fp-username" placeholder="Votre nom d'utilisateur" autocomplete="username"></div>
+          <div style="font-size:12.5px;font-weight:600;color:var(--ink);margin-bottom:5px;">Adresse e-mail</div>
+          <div class="auth-field">${authIcon("user")}<input id="fp-email" type="email" placeholder="votre@email.com" autocomplete="email"></div>
         </div>
-        <div>
-          <div style="font-size:12.5px;font-weight:600;color:var(--ink);margin-bottom:5px;">Code de secours</div>
-          <div class="auth-field">${authIcon("key")}<input id="fp-code" placeholder="XXXX-XXXX-XXXX" style="text-transform:uppercase;letter-spacing:.05em;"></div>
-        </div>
-        <div>
-          <div style="font-size:12.5px;font-weight:600;color:var(--ink);margin-bottom:5px;">Nouveau mot de passe</div>
-          <div class="auth-field">${authIcon("lock")}<input id="fp-newpassword" type="password" autocomplete="new-password"></div>
-        </div>
-        <button class="btn" style="justify-content:center;padding:12px;font-size:14.5px;margin-top:4px;" onclick="submitForgotPassword()">Réinitialiser le mot de passe</button>
+        <button class="btn" style="justify-content:center;padding:12px;font-size:14.5px;margin-top:4px;" onclick="submitForgotPassword()">Envoyer le lien de réinitialisation</button>
         <button class="btn btn-outline" style="justify-content:center;padding:10px;font-size:13px;border-color:var(--line);color:var(--ink);" onclick="renderAuthScreen('login')">← Retour à la connexion</button>
       </div>`;
   } else {
@@ -4167,49 +4156,34 @@ function authScreenHtml(mode, error){
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:22px;">
         ${authIcon("lock",44)}
         <div>
-          <div style="font-family:Georgia,serif;font-size:22px;font-weight:bold;color:var(--ink);">${isSetup ? "Créer le compte administrateur" : "Connexion"}</div>
-          <div style="font-size:12.5px;opacity:.6;margin-top:2px;">${isSetup ? "Premier lancement sur cet appareil" : "Veuillez vous connecter pour accéder au registre"}</div>
+          <div style="font-family:Georgia,serif;font-size:22px;font-weight:bold;color:var(--ink);">Connexion</div>
+          <div style="font-size:12.5px;opacity:.6;margin-top:2px;">Veuillez vous connecter pour accéder au registre</div>
         </div>
       </div>
       ${error ? `<div style="background:#A6432E15;color:var(--late);border-radius:8px;padding:9px 12px;font-size:12.5px;margin-bottom:16px;">${esc(error)}</div>` : ""}
       <div style="display:flex;flex-direction:column;gap:14px;">
         <div>
-          <div style="font-size:12.5px;font-weight:600;color:var(--ink);margin-bottom:5px;">Nom d'utilisateur</div>
-          <div class="auth-field">${authIcon("user")}<input id="auth-username" placeholder="Entrez votre nom d'utilisateur" autocomplete="username"></div>
+          <div style="font-size:12.5px;font-weight:600;color:var(--ink);margin-bottom:5px;">Adresse e-mail</div>
+          <div class="auth-field">${authIcon("user")}<input id="auth-username" type="email" placeholder="votre@email.com" autocomplete="email"></div>
         </div>
         <div>
           <div style="font-size:12.5px;font-weight:600;color:var(--ink);margin-bottom:5px;">Mot de passe</div>
           <div class="auth-field">
             ${authIcon("lock")}
-            <input id="auth-password" type="password" placeholder="Entrez votre mot de passe" autocomplete="${isSetup?'new-password':'current-password'}">
+            <input id="auth-password" type="password" placeholder="Entrez votre mot de passe" autocomplete="current-password">
             <button type="button" class="auth-eye" onclick="toggleAuthPasswordVisibility('auth-password', this)" title="Afficher / masquer">${authIcon("eye")}</button>
           </div>
         </div>
-        ${isSetup ? `
-          <div>
-            <div style="font-size:12.5px;font-weight:600;color:var(--ink);margin-bottom:5px;">Confirmer le mot de passe</div>
-            <div class="auth-field">
-              ${authIcon("lock")}
-              <input id="auth-password2" type="password" placeholder="Retapez le mot de passe" autocomplete="new-password">
-              <button type="button" class="auth-eye" onclick="toggleAuthPasswordVisibility('auth-password2', this)" title="Afficher / masquer">${authIcon("eye")}</button>
-            </div>
-          </div>
-        ` : `
-          <div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;">
-            <label style="display:flex;align-items:center;gap:7px;color:#555;cursor:pointer;">
-              <input type="checkbox" id="auth-remember" style="width:14px;height:14px;">
-              Se souvenir de moi
-            </label>
-            <a href="#" onclick="renderAuthScreen('forgot');return false;" style="color:#2f4f8f;text-decoration:none;font-weight:500;">Mot de passe oublié ?</a>
-          </div>
-        `}
-        <button class="btn" style="justify-content:center;padding:12px;font-size:14.5px;margin-top:4px;" onclick="${isSetup ? 'submitSetup()' : 'submitLogin()'}">${isSetup ? "Créer le compte et continuer" : "Se connecter"}</button>
+        <div style="display:flex;justify-content:flex-end;align-items:center;font-size:12.5px;">
+          <a href="#" onclick="renderAuthScreen('forgot');return false;" style="color:#2f4f8f;text-decoration:none;font-weight:500;">Mot de passe oublié ?</a>
+        </div>
+        <button class="btn" style="justify-content:center;padding:12px;font-size:14.5px;margin-top:4px;" onclick="submitLogin()">Se connecter</button>
       </div>
       <div class="auth-help">
         ${authIcon("info",18)}
         <div>
           <div style="font-weight:600;color:var(--ink);">Besoin d'aide ?</div>
-          <div style="opacity:.7;margin-top:1px;">${isSetup ? "Ce compte sera l'administrateur principal de cet appareil." : "En cas d'oubli, utilisez le code de secours remis à la création de votre compte."}</div>
+          <div style="opacity:.7;margin-top:1px;">Pas encore de compte ? Contactez l'administrateur de l'école pour qu'il vous en crée un.</div>
         </div>
       </div>`;
   }
@@ -4431,12 +4405,12 @@ function renderAuthScreen(mode, error){
   document.getElementById("app").innerHTML = authScreenHtml(mode, error);
   const onEnter = (fn) => (e) => { if(e.key === "Enter") fn(); };
   if(mode === "forgot"){
-    document.getElementById("fp-newpassword").addEventListener("keydown", onEnter(submitForgotPassword));
-    document.getElementById("fp-username").focus();
+    document.getElementById("fp-email").addEventListener("keydown", onEnter(submitForgotPassword));
+    document.getElementById("fp-email").focus();
     return;
   }
-  const pwField = document.getElementById(mode==="setup" ? "auth-password2" : "auth-password");
-  if(pwField) pwField.addEventListener("keydown", onEnter(mode==="setup" ? submitSetup : submitLogin));
+  const pwField = document.getElementById("auth-password");
+  if(pwField) pwField.addEventListener("keydown", onEnter(submitLogin));
   document.getElementById("auth-username").focus();
 }
 
@@ -4463,101 +4437,52 @@ async function showRecoveryCodeOnce(code, username){
   });
 }
 
-async function submitSetup(){
-  const username = document.getElementById("auth-username").value.trim();
-  const pw = document.getElementById("auth-password").value;
-  const pw2 = document.getElementById("auth-password2").value;
-  if(!username || !pw){ renderAuthScreen("setup", "Veuillez renseigner un nom d'utilisateur et un mot de passe."); return; }
-  if(pw.length < 4){ renderAuthScreen("setup", "Le mot de passe doit contenir au moins 4 caractères."); return; }
-  if(pw !== pw2){ renderAuthScreen("setup", "Les deux mots de passe ne correspondent pas."); return; }
-  const hash = await hashPassword(pw);
-  const recoveryCode = generateRecoveryCode();
-  const recoveryCodeHash = await hashPassword(recoveryCode);
-  const users = [{ username, passwordHash: hash, recoveryCodeHash, role: "admin", createdAt: new Date().toISOString() }];
-  saveAuthUsers(users);
-  setSession(username, false);
-  state.currentUser = username;
-  journalAdd("Création du compte administrateur", username);
-  saveData();
-  await showRecoveryCodeOnce(recoveryCode, username);
-  initApp();
-}
-
 async function submitLogin(){
-  const username = document.getElementById("auth-username").value.trim();
+  const email = document.getElementById("auth-username").value.trim();
   const pw = document.getElementById("auth-password").value;
-  const remember = document.getElementById("auth-remember") ? document.getElementById("auth-remember").checked : false;
-  const users = loadAuthUsers();
-  const user = users.find(u => u.username.toLowerCase() === username.toLowerCase());
-  if(!user){ renderAuthScreen("login", "Nom d'utilisateur ou mot de passe incorrect."); return; }
-  const hash = await hashPassword(pw);
-  if(hash !== user.passwordHash){ renderAuthScreen("login", "Nom d'utilisateur ou mot de passe incorrect."); return; }
-  setSession(user.username, remember);
-  state.currentUser = user.username;
-  journalAdd("Connexion", user.username);
-  saveData();
-  initApp();
+  if(!email || !pw){ renderAuthScreen("login", "Veuillez renseigner votre e-mail et votre mot de passe."); return; }
+  try{
+    await firebase.auth().signInWithEmailAndPassword(email, pw);
+    // La suite (chargement du profil, affichage de l'appli) est gérée
+    // automatiquement par l'écouteur onAuthStateChanged plus bas.
+  }catch(e){
+    renderAuthScreen("login", "Connexion impossible : e-mail ou mot de passe incorrect.");
+  }
 }
 
 async function submitForgotPassword(){
-  const username = document.getElementById("fp-username").value.trim();
-  const code = document.getElementById("fp-code").value.trim().toUpperCase();
-  const newPw = document.getElementById("fp-newpassword").value;
-  if(!username || !code || !newPw){ renderAuthScreen("forgot", "Veuillez remplir tous les champs."); return; }
-  if(newPw.length < 4){ renderAuthScreen("forgot", "Le nouveau mot de passe doit contenir au moins 4 caractères."); return; }
-  const users = loadAuthUsers();
-  const user = users.find(u => u.username.toLowerCase() === username.toLowerCase());
-  if(!user || !user.recoveryCodeHash){ renderAuthScreen("forgot", "Utilisateur introuvable, ou aucun code de secours n'est enregistré pour ce compte."); return; }
-  const codeHash = await hashPassword(code);
-  if(codeHash !== user.recoveryCodeHash){ renderAuthScreen("forgot", "Code de secours incorrect."); return; }
-  user.passwordHash = await hashPassword(newPw);
-  saveAuthUsers(users);
-  journalAdd("Réinitialisation du mot de passe (code de secours)", username);
-  saveData();
-  await showAlert("Mot de passe réinitialisé avec succès. Vous pouvez maintenant vous connecter.");
-  renderAuthScreen("login");
+  const email = document.getElementById("fp-email").value.trim();
+  if(!email){ renderAuthScreen("forgot", "Veuillez renseigner votre adresse e-mail."); return; }
+  try{
+    await firebase.auth().sendPasswordResetEmail(email);
+    await showAlert("Un e-mail de réinitialisation a été envoyé à " + email + ". Vérifiez votre boîte de réception (et vos spams).");
+    renderAuthScreen("login");
+  }catch(e){
+    renderAuthScreen("forgot", "Impossible d'envoyer l'e-mail : vérifiez l'adresse saisie.");
+  }
 }
 
 function logout(){
   journalAdd("Déconnexion", getCurrentUser());
   saveData();
-  setSession("");
-  initApp();
+  firebase.auth().signOut();
+  // L'écouteur onAuthStateChanged affichera automatiquement l'écran de connexion.
 }
 
 /* ---------------- Gestion des utilisateurs (comptes locaux) ---------------- */
 function viewUtilisateurs(){
-  const users = loadAuthUsers();
-  const rows = users.map(u => `
-    <tr>
-      <td>${esc(u.username)}</td>
-      <td style="opacity:.7;">${esc(u.role||"utilisateur")}</td>
-      <td style="opacity:.6;">${formatDateTimeFr(u.createdAt)}</td>
-      <td class="right">
-        ${u.username === getCurrentUser() ? `<span style="font-size:11px;opacity:.5;">Vous</span>` : `<button class="icon-btn" onclick="deleteAuthUser('${esc(u.username)}')">🗑️</button>`}
-      </td>
-    </tr>`).join("");
-
+  const estAdmin = state.currentRole === "Admin";
   return `
     <div class="title-row"><div>
       <div class="eyebrow">Sécurité</div>
-      <h1 class="serif">Gestion des utilisateurs</h1>
-      <p class="subtitle">Comptes propres à cet appareil. Chaque personne qui utilise ce poste devrait avoir son propre compte pour une traçabilité fiable.</p>
+      <h1 class="serif">Mon compte</h1>
+      <p class="subtitle">Connexion sécurisée par e-mail. Chaque enseignant a son propre compte, partagé entre tous ses appareils.</p>
     </div></div>
 
     <div class="table-wrap"><table>
-      <thead><tr><th>Nom d'utilisateur</th><th>Rôle</th><th>Créé le</th><th></th></tr></thead>
-      <tbody>${rows}</tbody>
+      <thead><tr><th>E-mail</th><th>Rôle</th></tr></thead>
+      <tbody><tr><td>${esc(getCurrentUser())}</td><td style="opacity:.7;">${estAdmin ? "Administrateur" : "Enseignant"}</td></tr></tbody>
     </table></div>
-
-    <div class="form-card">
-      <div class="form-title">Ajouter un utilisateur</div>
-      <div class="form-row">
-        <div class="field"><label>Nom d'utilisateur</label><input id="nu-username"></div>
-        <div class="field"><label>Mot de passe</label><input id="nu-password" type="password"></div>
-        <button class="btn" onclick="addAuthUser()">➕ Ajouter</button>
-      </div>
-    </div>
 
     <div class="form-card">
       <div class="form-title">Changer mon mot de passe</div>
@@ -4566,74 +4491,85 @@ function viewUtilisateurs(){
         <button class="btn" onclick="changeMyPassword()">🔑 Mettre à jour</button>
       </div>
     </div>
+
+    ${estAdmin ? `
+    <div class="form-card">
+      <div class="form-title">Ajouter un nouvel enseignant</div>
+      <div class="subtitle" style="margin-top:-6px;">
+        La création de comptes se fait pour l'instant depuis la console Firebase (par mesure de sécurité) :<br>
+        1. Firebase Console → Authentication → Ajouter un utilisateur (e-mail + mot de passe provisoire).<br>
+        2. Copiez son identifiant (UID).<br>
+        3. Firestore Database → Données → collection <code>users</code> → nouveau document avec cet UID, contenant <code>ecoleId: "nguizani"</code> et <code>role: "Enseignant"</code> (ou <code>"Admin"</code>).
+      </div>
+    </div>` : ""}
   `;
-}
-
-async function addAuthUser(){
-  const username = document.getElementById("nu-username").value.trim();
-  const pw = document.getElementById("nu-password").value;
-  if(!username || !pw){ await showAlert("Nom d'utilisateur et mot de passe requis."); return; }
-  if(pw.length < 4){ await showAlert("Le mot de passe doit contenir au moins 4 caractères."); return; }
-  const users = loadAuthUsers();
-  if(users.some(u => u.username.toLowerCase() === username.toLowerCase())){ await showAlert("Ce nom d'utilisateur existe déjà."); return; }
-  const hash = await hashPassword(pw);
-  users.push({ username, passwordHash: hash, role: "utilisateur", createdAt: new Date().toISOString() });
-  saveAuthUsers(users);
-  journalAdd("Création d'un compte utilisateur", username);
-  saveData();
-  renderView();
-}
-
-async function deleteAuthUser(username){
-  if(!(await showConfirm(`Supprimer le compte \u00ab ${username} \u00bb de cet appareil ?`, {title:"Supprimer un utilisateur"}))) return;
-  const users = loadAuthUsers().filter(u => u.username !== username);
-  saveAuthUsers(users);
-  journalAdd("Suppression d'un compte utilisateur", username);
-  saveData();
-  renderView();
 }
 
 async function changeMyPassword(){
   const pw = document.getElementById("cp-password").value;
-  if(!pw || pw.length < 4){ await showAlert("Le mot de passe doit contenir au moins 4 caractères."); return; }
-  const users = loadAuthUsers();
-  const me = users.find(u => u.username === getCurrentUser());
-  if(!me) return;
-  me.passwordHash = await hashPassword(pw);
-  saveAuthUsers(users);
-  journalAdd("Changement de mot de passe", getCurrentUser());
-  saveData();
-  await showAlert("Mot de passe mis à jour.");
-  renderView();
+  if(!pw || pw.length < 6){ await showAlert("Le mot de passe doit contenir au moins 6 caractères."); return; }
+  try{
+    await firebase.auth().currentUser.updatePassword(pw);
+    journalAdd("Changement de mot de passe", getCurrentUser());
+    saveData();
+    await showAlert("Mot de passe mis à jour.");
+    renderView();
+  }catch(e){
+    if(e.code === "auth/requires-recent-login"){
+      await showAlert("Pour votre sécurité, veuillez vous déconnecter puis vous reconnecter avant de changer votre mot de passe.");
+    } else {
+      await showAlert("Erreur : " + (e.message||e));
+    }
+  }
 }
 
 /* ---------------- Démarrage : vérifie l'authentification avant d'afficher l'app ---------------- */
-function initApp(){
-  // Premier lancement absolu sur cet appareil (aucune école configurée) :
-  // l'assistant de configuration passe avant tout, y compris avant la
-  // création du compte administrateur — impossible de commencer sans avoir
-  // renseigné au moins le nom de l'école.
-  if(!state.data.ecole.configured){
-    renderSetupWizard("ecole");
-    return;
-  }
-  const users = loadAuthUsers();
-  if(users.length === 0){
-    renderAuthScreen("setup");
-    return;
-  }
-  const session = getSession();
-  if(!session || !users.some(u => u.username === session)){
+async function initApp(user){
+  if(!user){
     renderAuthScreen("login");
     return;
   }
-  state.currentUser = session;
+  // Utilisateur authentifié auprès de Firebase : on va chercher son profil
+  // (ecoleId + rôle) dans Firestore avant d'afficher quoi que ce soit.
+  let profil;
+  try{
+    const snap = await firebase.firestore().collection("users").doc(user.uid).get();
+    if(!snap.exists){
+      renderAuthScreen("login", "Compte authentifié, mais aucun profil n'est associé. Contactez l'administrateur de l'école.");
+      return;
+    }
+    profil = snap.data();
+  }catch(e){
+    renderAuthScreen("login", "Erreur de connexion au serveur : " + (e.message||e));
+    return;
+  }
+  state.currentUser = user.email;
+  state.currentUserUid = user.uid;
+  state.currentRole = profil.role || "";
+  state.currentEcoleId = profil.ecoleId || "";
+
+  if(!state.data.ecole.configured){
+    // Les données de l'école (élèves, paiements...) ne sont pas encore
+    // migrées vers Firestore à ce stade — elles vivent encore sur l'appareil
+    // qui les a saisies. Sur un nouvel appareil, il n'y a donc rien à
+    // afficher pour l'instant : on prévient plutôt que de lancer par erreur
+    // l'assistant de création d'une nouvelle école (qui écraserait les
+    // repères locaux). Cet écran disparaîtra une fois les données migrées.
+    document.getElementById("app").innerHTML = `
+      <div class="auth-page"><div class="auth-card"><div class="auth-right" style="width:100%;"><div class="auth-right-inner">
+        <div style="font-family:Georgia,serif;font-size:20px;font-weight:bold;color:var(--ink);margin-bottom:10px;">Connecté : ${esc(user.email)}</div>
+        <p style="font-size:13.5px;line-height:1.6;">Les données de l'école (élèves, paiements) ne sont pas encore disponibles sur cet appareil. La synchronisation complète entre appareils arrive dans une prochaine mise à jour. En attendant, utilisez l'appareil habituel de l'école pour la saisie.</p>
+        <button class="btn btn-outline" style="margin-top:14px;" onclick="logout()">Se déconnecter</button>
+      </div></div></div></div>`;
+    return;
+  }
+
   render();
   tryAutoReconnect();
 }
 
 /* ---------------- démarrage ---------------- */
-initApp();
+firebase.auth().onAuthStateChanged(initApp);
 </script>
 </body>
 </html>
