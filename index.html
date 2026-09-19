@@ -4717,7 +4717,7 @@ async function initApp(user){
   }
   state.currentUser = user.email;
   state.currentUserUid = user.uid;
-  state.currentRole = profil.role || "";
+  state.currentRole = (profil.role || "").trim();
   state.currentEcoleId = profil.ecoleId || "";
 
   if(!state.currentEcoleId){
@@ -4740,7 +4740,7 @@ async function initApp(user){
 
   if(statut === "nouvelle-ecole"){
     if(state.currentRole !== "Admin"){
-      renderAuthScreen("login", "Cette école n'a pas encore été configurée. Contactez votre administrateur.");
+      renderAuthScreen("login", `Cette école n'a pas encore été configurée. Contactez votre administrateur. (rôle détecté : "${state.currentRole}")`);
       return;
     }
     renderSetupWizard("ecole");
