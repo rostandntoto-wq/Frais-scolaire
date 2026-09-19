@@ -437,8 +437,8 @@ async function runFirestoreSync(){
   const db = firebase.firestore();
   const ecoleRef = db.collection("ecoles").doc(ecoleId);
   try{
-    await ecoleRef.set({ ecole: state.data.ecole, bareme: state.data.bareme }, { merge:true });
-  }catch(e){ console.error("Synchronisation école/barème impossible :", e); }
+    await ecoleRef.set({ ecole: state.data.ecole, bareme: state.data.bareme, journal: state.data.journal||[] }, { merge:true });
+  }catch(e){ console.error("Synchronisation école/barème/journal impossible :", e); }
   await syncFirestoreCollection(ecoleRef.collection("eleves"), state.data.eleves, lastSyncedEleves);
   await syncFirestoreCollection(ecoleRef.collection("paiements"), state.data.paiements, lastSyncedPaiements);
 }
@@ -484,24 +484,35 @@ async function syncFirestoreCollection(colRef, currentArray, lastSyncedMap){
 async function loadFromFirestore(ecoleId){
   const db = firebase.firestore();
   const ecoleRef = db.collection("ecoles").doc(ecoleId);
-  const [ecoleSnap, elevesSnap, paiementsSnap] = await Promise.all([
-    ecoleRef.get(), ecoleRef.collection("eleves").get(), ecoleRef.collection("paiements").get()
+  const [ecoleSnap, elevesSnap, paiementsSnap, archivesSnap] = await Promise.all([
+    ecoleRef.get(), ecoleRef.collection("eleves").get(), ecoleRef.collection("paiements").get(), ecoleRef.collection("archives").get()
   ]);
-  const cloudEstVide = !ecoleSnap.exists && elevesSnap.empty && paiementsSnap.empty;
+  const cloudEstVide = !ecoleSnap.exists && elevesSnap.empty && paiementsSnap.empty && archivesSnap.empty;
   const localDejaConfigure = !!state.data.ecole.configured;
 
   if(cloudEstVide && localDejaConfigure){
     lastSyncedEleves = new Map();
     lastSyncedPaiements = new Map();
     await runFirestoreSync();
+    // Migration initiale des archives existantes (une seule fois, tant que
+    // le cloud est vide) — peu fréquent, donc pas besoin du même mécanisme
+    // de diff incrémental que pour élèves/paiements.
+    const archives = state.data.archives || {};
+    for(const annee of Object.keys(archives)){
+      try{ await ecoleRef.collection("archives").doc(annee).set(archives[annee]); }
+      catch(e){ console.error("Migration de l'archive impossible :", annee, e); }
+    }
   } else {
     if(ecoleSnap.exists){
       const d = ecoleSnap.data();
       if(d.ecole) state.data.ecole = { ...state.data.ecole, ...d.ecole };
       if(d.bareme) state.data.bareme = d.bareme;
+      if(d.journal) state.data.journal = d.journal;
     }
     state.data.eleves = elevesSnap.docs.map(d=>d.data());
     state.data.paiements = paiementsSnap.docs.map(d=>d.data());
+    state.data.archives = {};
+    archivesSnap.docs.forEach(d => { state.data.archives[d.id] = d.data(); });
     eleveDupIndexArr = null;
     lastSyncedEleves = new Map(state.data.eleves.map(e=>[e.id, JSON.stringify(e)]));
     lastSyncedPaiements = new Map(state.data.paiements.map(p=>[p.id, JSON.stringify(p)]));
@@ -514,6 +525,22 @@ async function loadFromFirestore(ecoleId){
       const a = document.activeElement;
       return a && (a.tagName==="INPUT" || a.tagName==="TEXTAREA" || a.tagName==="SELECT");
     };
+    ecoleRef.onSnapshot(snap => {
+      if(!snap.exists) return;
+      const d = snap.data();
+      if(d.ecole) state.data.ecole = { ...state.data.ecole, ...d.ecole };
+      if(d.bareme) state.data.bareme = d.bareme;
+      if(d.journal) state.data.journal = d.journal;
+      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); }catch(e){}
+      if(!enSaisie()) renderView();
+    });
+    ecoleRef.collection("archives").onSnapshot(snap => {
+      const archives = {};
+      snap.docs.forEach(d => { archives[d.id] = d.data(); });
+      state.data.archives = archives;
+      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); }catch(e){}
+      if(!enSaisie()) renderView();
+    });
     ecoleRef.collection("eleves").onSnapshot(snap => {
       state.data.eleves = snap.docs.map(d=>d.data());
       lastSyncedEleves = new Map(state.data.eleves.map(e=>[e.id, JSON.stringify(e)]));
@@ -1775,6 +1802,13 @@ async function nouvelleAnneeScolaire(){
   };
 
   journalAdd("Nouvelle année scolaire", `Archivage de ${ancienneAnnee} → passage à ${nouvelleAnnee.trim()} (${d.eleves.length} élèves, ${d.paiements.length} paiements archivés)`);
+
+  if(state.currentEcoleId){
+    try{
+      await firebase.firestore().collection("ecoles").doc(state.currentEcoleId)
+        .collection("archives").doc(ancienneAnnee).set(d.archives[ancienneAnnee]);
+    }catch(e){ console.error("Synchronisation de l'archive impossible :", e); }
+  }
 
   d.paiements = [];
   d.ecole.anneeScolaire = nouvelleAnnee.trim();
