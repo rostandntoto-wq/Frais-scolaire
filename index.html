@@ -275,6 +275,13 @@ const firebaseConfig = {
 };
 try{
   firebase.initializeApp(firebaseConfig);
+  // Persistance locale (IndexedDB) : après le tout premier chargement,
+  // les rechargements suivants lisent d'abord le cache local (quasi
+  // instantané) pendant que Firestore se resynchronise en tâche de fond.
+  // Permet aussi de continuer à consulter les données sans connexion.
+  firebase.firestore().enablePersistence({ synchronizeTabs: true }).catch(function(e){
+    console.log("Persistance hors-ligne non activée :", e.code || e);
+  });
 }catch(e){ console.error("Erreur d'initialisation Firebase", e); }
 
 async function firebaseTestLogin(){
