@@ -488,7 +488,13 @@ async function loadFromFirestore(ecoleId){
     ecoleRef.get(), ecoleRef.collection("eleves").get(), ecoleRef.collection("paiements").get(), ecoleRef.collection("archives").get()
   ]);
   const cloudEstVide = !ecoleSnap.exists && elevesSnap.empty && paiementsSnap.empty && archivesSnap.empty;
-  const localDejaConfigure = !!state.data.ecole.configured;
+  const ecoleIdLocal = state.data.ecole._ecoleId;
+  // Un même appareil pourrait, un jour, être utilisé pour deux écoles
+  // différentes (ex : test). On ne considère les données locales comme
+  // "à migrer" que si elles n'ont encore jamais été associées à une AUTRE
+  // école — sinon on risquerait de pousser les données de l'école A dans
+  // l'espace Firestore de l'école B.
+  const localDejaConfigure = !!state.data.ecole.configured && (!ecoleIdLocal || ecoleIdLocal === ecoleId);
 
   if(cloudEstVide && localDejaConfigure){
     lastSyncedEleves = new Map();
@@ -502,6 +508,13 @@ async function loadFromFirestore(ecoleId){
       try{ await ecoleRef.collection("archives").doc(annee).set(archives[annee]); }
       catch(e){ console.error("Migration de l'archive impossible :", annee, e); }
     }
+    state.data.ecole._ecoleId = ecoleId;
+  } else if(cloudEstVide && !localDejaConfigure){
+    // École réellement nouvelle (ni cloud ni cet appareil n'ont de données
+    // qui lui appartiennent) : on ne touche à rien ici, initApp() proposera
+    // l'assistant de configuration plutôt que d'afficher un tableau de bord
+    // vide, ou pire, les données d'une autre école restées en local.
+    return "nouvelle-ecole";
   } else {
     if(ecoleSnap.exists){
       const d = ecoleSnap.data();
@@ -517,6 +530,7 @@ async function loadFromFirestore(ecoleId){
     lastSyncedEleves = new Map(state.data.eleves.map(e=>[e.id, JSON.stringify(e)]));
     lastSyncedPaiements = new Map(state.data.paiements.map(p=>[p.id, JSON.stringify(p)]));
     state.data.ecole.configured = true;
+    state.data.ecole._ecoleId = ecoleId;
   }
 
   if(!firestoreListenersActifs){
@@ -555,6 +569,7 @@ async function loadFromFirestore(ecoleId){
       if(!enSaisie()) renderView();
     });
   }
+  return "ok";
 }
 
 /* ---------------- Synchronisation Excel périodique ---------------- */
@@ -4552,9 +4567,10 @@ function removeWizardBareme(index){
 
 function submitWizardBareme(){
   state.data.ecole.configured = true;
+  state.data.ecole._ecoleId = state.currentEcoleId;
   journalAdd("Configuration initiale de l'école", state.data.ecole.nom);
   saveData();
-  initApp();
+  initApp(firebase.auth().currentUser);
 }
 
 function renderAuthScreen(mode, error){
@@ -4714,10 +4730,20 @@ async function initApp(user){
       <div style="font-family:Georgia,serif;font-size:18px;font-weight:bold;color:var(--ink);">Chargement des données de l'école…</div>
     </div></div></div></div>`;
 
+  let statut;
   try{
-    await loadFromFirestore(state.currentEcoleId);
+    statut = await loadFromFirestore(state.currentEcoleId);
   }catch(e){
     renderAuthScreen("login", "Erreur de chargement des données : " + (e.message||e));
+    return;
+  }
+
+  if(statut === "nouvelle-ecole"){
+    if(state.currentRole !== "Admin"){
+      renderAuthScreen("login", "Cette école n'a pas encore été configurée. Contactez votre administrateur.");
+      return;
+    }
+    renderSetupWizard("ecole");
     return;
   }
 
