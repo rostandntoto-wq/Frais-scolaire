@@ -406,6 +406,128 @@ function saveData(){
   maybeAutoBackup();
   markPendingSync();
   updateSaveNote();
+  scheduleFirestoreSync();
+}
+
+/* ---------------- Synchronisation Firestore (élèves, paiements, école, barème) ----------------
+   Principe : state.data.eleves / state.data.paiements restent des tableaux en
+   mémoire, modifiés exactement comme avant (push/filter/mutation directe) —
+   aucune des fonctions d'ajout/modification/suppression n'a besoin de changer.
+   On compare simplement, à chaque saveData(), le contenu actuel de ces
+   tableaux à la dernière version connue comme synchronisée (lastSyncedEleves /
+   lastSyncedPaiements), et on n'envoie vers Firestore QUE ce qui a changé —
+   un document par élève / par paiement, sous ecoles/{ecoleId}/eleves|paiements. */
+let lastSyncedEleves = new Map();   // id élève -> JSON du dernier état envoyé à Firestore
+let lastSyncedPaiements = new Map(); // id paiement -> JSON du dernier état envoyé à Firestore
+let firestoreListenersActifs = false;
+let firestoreSyncTimer = null;
+
+function scheduleFirestoreSync(){
+  if(!state.currentEcoleId) return; // pas encore connecté : rien à synchroniser
+  if(firestoreSyncTimer) return;
+  firestoreSyncTimer = setTimeout(async () => {
+    firestoreSyncTimer = null;
+    await runFirestoreSync();
+  }, 500); // regroupe les sauvegardes rapprochées (ex: import en masse) en un seul envoi
+}
+
+async function runFirestoreSync(){
+  const ecoleId = state.currentEcoleId;
+  if(!ecoleId) return;
+  const db = firebase.firestore();
+  const ecoleRef = db.collection("ecoles").doc(ecoleId);
+  try{
+    await ecoleRef.set({ ecole: state.data.ecole, bareme: state.data.bareme }, { merge:true });
+  }catch(e){ console.error("Synchronisation école/barème impossible :", e); }
+  await syncFirestoreCollection(ecoleRef.collection("eleves"), state.data.eleves, lastSyncedEleves);
+  await syncFirestoreCollection(ecoleRef.collection("paiements"), state.data.paiements, lastSyncedPaiements);
+}
+
+async function syncFirestoreCollection(colRef, currentArray, lastSyncedMap){
+  const ops = [];
+  const currentIds = new Set();
+  for(const item of currentArray){
+    if(!item || !item.id) continue;
+    currentIds.add(item.id);
+    const json = JSON.stringify(item);
+    if(lastSyncedMap.get(item.id) !== json) ops.push({type:"set", id:item.id, data:item, json});
+  }
+  for(const id of Array.from(lastSyncedMap.keys())){
+    if(!currentIds.has(id)) ops.push({type:"delete", id});
+  }
+  if(ops.length === 0) return;
+  const db = firebase.firestore();
+  try{
+    for(let i=0;i<ops.length;i+=400){
+      const chunk = ops.slice(i, i+400);
+      const batch = db.batch();
+      for(const op of chunk){
+        if(op.type==="set") batch.set(colRef.doc(op.id), op.data);
+        else batch.delete(colRef.doc(op.id));
+      }
+      await batch.commit();
+    }
+    for(const op of ops){
+      if(op.type==="set") lastSyncedMap.set(op.id, op.json);
+      else lastSyncedMap.delete(op.id);
+    }
+  }catch(e){
+    console.error("Synchronisation Firestore impossible :", e);
+  }
+}
+
+// Premier chargement après connexion : on récupère les données de l'école
+// depuis Firestore (source de vérité pour tous les appareils). Si Firestore
+// est encore vide pour cette école ET que cet appareil a déjà des données
+// réelles en local (cas de l'appareil historique de l'école), on les
+// pousse une bonne fois vers le cloud pour amorcer la synchronisation.
+async function loadFromFirestore(ecoleId){
+  const db = firebase.firestore();
+  const ecoleRef = db.collection("ecoles").doc(ecoleId);
+  const [ecoleSnap, elevesSnap, paiementsSnap] = await Promise.all([
+    ecoleRef.get(), ecoleRef.collection("eleves").get(), ecoleRef.collection("paiements").get()
+  ]);
+  const cloudEstVide = !ecoleSnap.exists && elevesSnap.empty && paiementsSnap.empty;
+  const localDejaConfigure = !!state.data.ecole.configured;
+
+  if(cloudEstVide && localDejaConfigure){
+    lastSyncedEleves = new Map();
+    lastSyncedPaiements = new Map();
+    await runFirestoreSync();
+  } else {
+    if(ecoleSnap.exists){
+      const d = ecoleSnap.data();
+      if(d.ecole) state.data.ecole = { ...state.data.ecole, ...d.ecole };
+      if(d.bareme) state.data.bareme = d.bareme;
+    }
+    state.data.eleves = elevesSnap.docs.map(d=>d.data());
+    state.data.paiements = paiementsSnap.docs.map(d=>d.data());
+    eleveDupIndexArr = null;
+    lastSyncedEleves = new Map(state.data.eleves.map(e=>[e.id, JSON.stringify(e)]));
+    lastSyncedPaiements = new Map(state.data.paiements.map(p=>[p.id, JSON.stringify(p)]));
+    state.data.ecole.configured = true;
+  }
+
+  if(!firestoreListenersActifs){
+    firestoreListenersActifs = true;
+    const enSaisie = () => {
+      const a = document.activeElement;
+      return a && (a.tagName==="INPUT" || a.tagName==="TEXTAREA" || a.tagName==="SELECT");
+    };
+    ecoleRef.collection("eleves").onSnapshot(snap => {
+      state.data.eleves = snap.docs.map(d=>d.data());
+      lastSyncedEleves = new Map(state.data.eleves.map(e=>[e.id, JSON.stringify(e)]));
+      eleveDupIndexArr = null;
+      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); }catch(e){}
+      if(!enSaisie()) renderView();
+    });
+    ecoleRef.collection("paiements").onSnapshot(snap => {
+      state.data.paiements = snap.docs.map(d=>d.data());
+      lastSyncedPaiements = new Map(state.data.paiements.map(p=>[p.id, JSON.stringify(p)]));
+      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); }catch(e){}
+      if(!enSaisie()) renderView();
+    });
+  }
 }
 
 /* ---------------- Synchronisation Excel périodique ---------------- */
@@ -4548,19 +4670,20 @@ async function initApp(user){
   state.currentRole = profil.role || "";
   state.currentEcoleId = profil.ecoleId || "";
 
-  if(!state.data.ecole.configured){
-    // Les données de l'école (élèves, paiements...) ne sont pas encore
-    // migrées vers Firestore à ce stade — elles vivent encore sur l'appareil
-    // qui les a saisies. Sur un nouvel appareil, il n'y a donc rien à
-    // afficher pour l'instant : on prévient plutôt que de lancer par erreur
-    // l'assistant de création d'une nouvelle école (qui écraserait les
-    // repères locaux). Cet écran disparaîtra une fois les données migrées.
-    document.getElementById("app").innerHTML = `
-      <div class="auth-page"><div class="auth-card"><div class="auth-right" style="width:100%;"><div class="auth-right-inner">
-        <div style="font-family:Georgia,serif;font-size:20px;font-weight:bold;color:var(--ink);margin-bottom:10px;">Connecté : ${esc(user.email)}</div>
-        <p style="font-size:13.5px;line-height:1.6;">Les données de l'école (élèves, paiements) ne sont pas encore disponibles sur cet appareil. La synchronisation complète entre appareils arrive dans une prochaine mise à jour. En attendant, utilisez l'appareil habituel de l'école pour la saisie.</p>
-        <button class="btn btn-outline" style="margin-top:14px;" onclick="logout()">Se déconnecter</button>
-      </div></div></div></div>`;
+  if(!state.currentEcoleId){
+    renderAuthScreen("login", "Votre compte n'est associé à aucune école. Contactez l'administrateur.");
+    return;
+  }
+
+  document.getElementById("app").innerHTML = `
+    <div class="auth-page"><div class="auth-card"><div class="auth-right" style="width:100%;"><div class="auth-right-inner">
+      <div style="font-family:Georgia,serif;font-size:18px;font-weight:bold;color:var(--ink);">Chargement des données de l'école…</div>
+    </div></div></div></div>`;
+
+  try{
+    await loadFromFirestore(state.currentEcoleId);
+  }catch(e){
+    renderAuthScreen("login", "Erreur de chargement des données : " + (e.message||e));
     return;
   }
 
