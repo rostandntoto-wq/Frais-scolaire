@@ -533,6 +533,24 @@ async function loadFromFirestore(ecoleId){
   const [ecoleSnap, elevesSnap, paiementsSnap, archivesSnap] = await Promise.all([
     ecoleRef.get(), ecoleRef.collection("eleves").get(), ecoleRef.collection("paiements").get(), ecoleRef.collection("archives").get()
   ]);
+
+  // Licence : chaque école a une date d'expiration (un an, en général),
+  // stockée dans son document ecoles/{ecoleId}, champ licenceExpire
+  // (type "horodatage"), réglée manuellement en Firestore Console — jamais
+  // modifiable depuis l'application elle-même. Passé cette date, l'accès
+  // est bloqué (et les règles de sécurité Firestore l'imposent aussi côté
+  // serveur, donc impossible à contourner en modifiant le fichier HTML).
+  if(ecoleSnap.exists){
+    const d0 = ecoleSnap.data();
+    if(d0.licenceExpire && typeof d0.licenceExpire.toDate === "function"){
+      const expireLe = d0.licenceExpire.toDate();
+      state.licenceExpireLe = expireLe;
+      if(expireLe.getTime() < Date.now()){
+        return "licence-expiree";
+      }
+    }
+  }
+
   const cloudEstVide = !ecoleSnap.exists && elevesSnap.empty && paiementsSnap.empty && archivesSnap.empty;
   const ecoleIdLocal = state.data.ecole._ecoleId;
   // Un même appareil pourrait, un jour, être utilisé pour deux écoles
@@ -4793,8 +4811,32 @@ async function initApp(user){
     return;
   }
 
+  if(statut === "licence-expiree"){
+    document.getElementById("app").innerHTML = `
+      <div class="auth-page"><div class="auth-card"><div class="auth-right" style="width:100%;"><div class="auth-right-inner">
+        <div style="font-family:Georgia,serif;font-size:20px;font-weight:bold;color:var(--late);margin-bottom:10px;">Licence expirée</div>
+        <p style="font-size:13.5px;line-height:1.6;">L'abonnement de votre école à ce logiciel est arrivé à échéance. Contactez l'administrateur/développeur de l'application pour le renouveler.</p>
+        <button class="btn btn-outline" style="margin-top:14px;" onclick="logout()">Se déconnecter</button>
+      </div></div></div></div>`;
+    return;
+  }
+
   render();
   tryAutoReconnect();
+
+  // Avertissement discret (non bloquant) si la licence expire dans moins de
+  // 30 jours, visible seulement par l'administrateur de l'école.
+  if(state.currentRole === "Admin" && state.licenceExpireLe){
+    const joursRestants = Math.ceil((state.licenceExpireLe.getTime() - Date.now()) / 86400000);
+    if(joursRestants <= 30){
+      const bandeau = document.createElement("div");
+      bandeau.style.cssText = "position:fixed;bottom:0;left:0;right:0;background:#A6432E;color:#fff;padding:8px 14px;font-size:12.5px;text-align:center;z-index:9999;";
+      bandeau.textContent = joursRestants > 0
+        ? `Licence de l'école : expire dans ${joursRestants} jour(s).`
+        : "Licence de l'école : expirée.";
+      document.body.appendChild(bandeau);
+    }
+  }
 }
 
 /* ---------------- démarrage ---------------- */
