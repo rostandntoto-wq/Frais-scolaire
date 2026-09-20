@@ -346,7 +346,7 @@ const LOGIN_BG_DATA = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA
 const STORAGE_KEY = "suivi-frais-scolaires-v1";
 
 /* ---------------- Version de l'application & mécanisme de mise à jour ---------------- */
-const APP_VERSION = "2.0.0";
+const APP_VERSION = "2.1.0";
 // Numéro affiché en bas de la page de connexion ("Besoin d'assistance ?").
 // Modifiez cette valeur avec votre numéro réel (appel + WhatsApp).
 const SUPPORT_PHONE = "+243 89 35 15 119";
@@ -1233,6 +1233,25 @@ function receiptNumber(n){
   return "R" + String(n).padStart(4,"0");
 }
 
+// Code reçu par défaut quand l'enseignant n'en a pas de renseigné dans son
+// profil : dérivé de son e-mail plutôt que de bloquer la saisie. Reconnaît
+// le motif "prenom.nom@..." ou "prenom_nom@..." (initiales des deux
+// parties) ; sinon, les deux premières lettres de la partie avant @.
+function deriveRecuCode(email){
+  const local = String(email||"").split("@")[0] || "XX";
+  const parts = local.split(/[._-]+/).filter(Boolean);
+  if(parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return (local.slice(0,2) || "XX").toUpperCase();
+}
+
+// Numéro de reçu complet tel qu'affiché/imprimé : préfixe de l'enseignant
+// qui a encaissé + numéro séquentiel propre à cet enseignant (voir
+// nextReceiptNumber). Les paiements enregistrés avant l'introduction de ce
+// système n'ont pas de recuCode : ils s'affichent sans préfixe.
+function receiptCode(p){
+  return (p && p.recuCode ? p.recuCode + "-" : "") + receiptNumber((p && p.numero) || 0);
+}
+
 function dateFr(iso){
   if(!iso) return "—";
   const parts = iso.split("-");
@@ -1304,19 +1323,22 @@ function payeTotal(payMap, eleveId, trimestre){
 }
 
 function nextReceiptNumber(){
-  // Mise en cache du dernier numéro : tant que le tableau des paiements n'a
-  // pas été remplacé (import, restauration...), on évite de le rebalayer en
-  // entier à chaque nouveau reçu — précieux avec des dizaines de milliers de
-  // paiements.
-  if(receiptMaxArr !== state.data.paiements){
-    receiptMaxNum = state.data.paiements.reduce((max,p) => Math.max(max, Number(p.numero)||0), 0);
+  // Numérotation propre à CHAQUE enseignant (voir state.currentRecuCode) :
+  // impossible pour deux personnes de produire le même numéro de reçu,
+  // même hors-ligne en même temps, puisque chacune a sa propre suite.
+  // Mise en cache par code tant que le tableau de paiements ne change pas.
+  const code = state.currentRecuCode || "";
+  if(receiptMaxArr !== state.data.paiements || receiptMaxCode !== code){
+    receiptMaxNum = state.data.paiements.reduce((max,p) => (p.recuCode||"")===code ? Math.max(max, Number(p.numero)||0) : max, 0);
     receiptMaxArr = state.data.paiements;
+    receiptMaxCode = code;
   }
   return receiptMaxNum + 1;
 }
-let receiptMaxArr = null, receiptMaxNum = 0;
+let receiptMaxArr = null, receiptMaxNum = 0, receiptMaxCode = null;
 function noteReceiptNumberUsed(numero){
   receiptMaxArr = state.data.paiements;
+  receiptMaxCode = state.currentRecuCode || "";
   receiptMaxNum = Math.max(receiptMaxNum, Number(numero)||0);
 }
 
@@ -2316,7 +2338,7 @@ function printRecettes(){
   const rows = filtres.map(p => {
     const el = d.eleves.find(e=>e.id===p.eleveId);
     return `<tr style="border-bottom:1px solid var(--line);">
-      <td style="padding:6px;">${receiptNumber(p.numero||0)}</td>
+      <td style="padding:6px;">${receiptCode(p)}</td>
       <td style="padding:6px;">${dateFr(p.date)}</td>
       <td style="padding:6px;">${el?esc(el.nom)+" "+esc(el.postnom):"—"}</td>
       <td style="padding:6px;text-align:right;">${money(p.montant)}</td>
@@ -2842,7 +2864,7 @@ function viewPaiements(){
       return groupValue === state.paiementClasseFiltre;
     });
   }
-  list.sort((a,b)=>(Number(b.numero)||0) - (Number(a.numero)||0));
+  list.sort((a,b)=>(b.createdAt||b.date||"").localeCompare(a.createdAt||a.date||"") || (Number(b.numero)||0)-(Number(a.numero)||0));
 
   const totalCount = list.length;
   const visibleList = list.slice(0, state.paiementsVisibleCount);
@@ -2855,7 +2877,7 @@ function viewPaiements(){
     if(p.annule){
       return `<tr style="opacity:.5;text-decoration:line-through;">
         <td class="check-col"></td>
-        <td style="opacity:.6;">${receiptNumber(p.numero||0)}</td>
+        <td style="opacity:.6;">${receiptCode(p)}</td>
         <td>${label}</td>
         <td>${classeOption}</td>
         <td class="center">T${p.trimestre}</td>
@@ -2869,7 +2891,7 @@ function viewPaiements(){
     }
     return `<tr>
       <td class="check-col"><input type="checkbox" ${checked} onchange="togglePaiementSelect('${p.id}')"></td>
-      <td style="opacity:.6;">${receiptNumber(p.numero||0)}</td>
+      <td style="opacity:.6;">${receiptCode(p)}</td>
       <td>${label}</td>
       <td style="opacity:.7;">${classeOption}</td>
       <td class="center">T${p.trimestre}</td>
@@ -3009,11 +3031,11 @@ function printClotureCaisse(dateStr){
 
   const totalJour = actifs.reduce((s,p)=>s+Number(p.montant||0),0);
 
-  const rows = paiementsDuJour.slice().sort((a,b)=>(a.numero||0)-(b.numero||0)).map(p => {
+  const rows = paiementsDuJour.slice().sort((a,b)=>(a.createdAt||a.date||"").localeCompare(b.createdAt||b.date||"") || (a.numero||0)-(b.numero||0)).map(p => {
     const el = d.eleves.find(e=>e.id===p.eleveId);
     const style = p.annule ? "text-decoration:line-through;color:#999;" : "";
     return `<tr style="border-bottom:1px solid var(--line);${style}">
-      <td style="padding:6px;">${receiptNumber(p.numero||0)}</td>
+      <td style="padding:6px;">${receiptCode(p)}</td>
       <td style="padding:6px;">${el?esc(el.nom)+" "+esc(el.postnom):"—"}</td>
       <td style="padding:6px;text-align:center;">T${p.trimestre}</td>
       <td style="padding:6px;">${esc(p.payeur)}</td>
@@ -3084,13 +3106,13 @@ function printPaymentsList(){
       return groupValue === state.paiementClasseFiltre;
     });
   }
-  list.sort((a,b)=>(Number(b.numero)||0) - (Number(a.numero)||0));
+  list.sort((a,b)=>(b.createdAt||b.date||"").localeCompare(a.createdAt||a.date||"") || (Number(b.numero)||0)-(Number(a.numero)||0));
 
   const rows = list.map(p => {
     const el = d.eleves.find(e=>e.id===p.eleveId);
     const style = p.annule ? "border-bottom:1px solid var(--line);text-decoration:line-through;color:#999;" : "border-bottom:1px solid var(--line);";
     return `<tr style="${style}">
-      <td style="padding:6px;">${receiptNumber(p.numero||0)}</td>
+      <td style="padding:6px;">${receiptCode(p)}</td>
       <td style="padding:6px;">${el?esc(el.nom)+" "+esc(el.postnom):"—"}</td>
       <td style="padding:6px;">${el?esc(classeOptionLabel(el)):""}</td>
       <td style="padding:6px;text-align:center;">T${p.trimestre}</td>
@@ -3178,7 +3200,7 @@ async function addPaiement(){
   if(doublon){
     const continuer = await showConfirm(
       `Un paiement identique existe déjà pour cet élève :\n\n` +
-      `Reçu ${receiptNumber(doublon.numero)} — T${trimestre} — ${money(montant)} — ${dateFr(date)}\n\n` +
+      `Reçu ${receiptCode(doublon)} — T${trimestre} — ${money(montant)} — ${dateFr(date)}\n\n` +
       `Voulez-vous quand même enregistrer ce nouveau paiement ?`,
       {title:"⚠️ Doublon possible", confirmLabel:"Enregistrer quand même"}
     );
@@ -3189,6 +3211,8 @@ async function addPaiement(){
   const nouveauPaiement = {
     id: uid("pay"),
     numero,
+    recuCode: state.currentRecuCode || "",
+    createdAt: new Date().toISOString(),
     eleveId: el.id,
     trimestre,
     date,
@@ -3202,7 +3226,7 @@ async function addPaiement(){
   // plutôt que reconstruction complète.
   paiementDupIndex.set(paiementDupKey(el.id, trimestre, montant, date), nouveauPaiement);
   noteReceiptNumberUsed(numero);
-  journalAdd("Encaissement", `Reçu ${receiptNumber(numero)} — ${el.nom} ${el.postnom} — ${money(montant)} (T${trimestre})`);
+  journalAdd("Encaissement", `Reçu ${receiptCode(nouveauPaiement)} — ${el.nom} ${el.postnom} — ${money(montant)} (T${trimestre})`);
   saveData(); renderView();
 }
 
@@ -3210,7 +3234,7 @@ async function annulerPaiement(id){
   const p = state.data.paiements.find(x=>x.id===id);
   if(!p) return;
   const el = state.data.eleves.find(e=>e.id===p.eleveId);
-  if(!(await showConfirm(`Annuler le reçu ${receiptNumber(p.numero)} (${money(p.montant)}) ?\n\nLe reçu reste visible dans l'historique, marqué \u00ab ANNULÉ \u00bb — il ne compte plus dans les totaux encaissés.`, {title:"Annulation de reçu"}))) return;
+  if(!(await showConfirm(`Annuler le reçu ${receiptCode(p)} (${money(p.montant)}) ?\n\nLe reçu reste visible dans l'historique, marqué \u00ab ANNULÉ \u00bb — il ne compte plus dans les totaux encaissés.`, {title:"Annulation de reçu"}))) return;
   const motif = await showPrompt("Motif de l'annulation — facultatif :", "", {title:"Annuler ce reçu"});
   // Un paiement annulé ne doit plus compter comme doublon potentiel : on
   // force la reconstruction de l'index au prochain ajout.
@@ -3219,7 +3243,7 @@ async function annulerPaiement(id){
   p.annulePar = getCurrentUser();
   p.annuleLe = new Date().toISOString();
   p.motifAnnulation = motif || "";
-  journalAdd("Annulation paiement", `Reçu ${receiptNumber(p.numero)} — ${el?el.nom+' '+el.postnom:'—'} — ${money(p.montant)}${motif?' — motif : '+motif:''}`);
+  journalAdd("Annulation paiement", `Reçu ${receiptCode(p)} — ${el?el.nom+' '+el.postnom:'—'} — ${money(p.montant)}${motif?' — motif : '+motif:''}`);
   saveData(); renderView();
 }
 
@@ -3373,7 +3397,7 @@ function downloadPdfBytes(bytes, filename){
 
 function receiptPdfOps(d, payment){
   const el = d.eleves.find(e=>e.id===payment.eleveId);
-  const numero = receiptNumber(payment.numero || 0);
+  const numero = receiptCode(payment);
   const ink = [0.118,0.165,0.290];
   const gold = [0.722,0.525,0.231];
   const paid = [0.184,0.420,0.310];
@@ -3447,7 +3471,7 @@ function downloadReceiptPdf(paymentId){
   if(!payment) return;
   const ops = receiptPdfOps(d, payment);
   const bytes = buildPdfBytes(360, 500, ops);
-  downloadPdfBytes(bytes, `recu-${receiptNumber(payment.numero||0)}.pdf`);
+  downloadPdfBytes(bytes, `recu-${receiptCode(payment)}.pdf`);
 }
 
 function downloadPaymentsListPdf(){
@@ -3461,7 +3485,7 @@ function downloadPaymentsListPdf(){
       return groupValue === state.paiementClasseFiltre;
     });
   }
-  list.sort((a,b)=>(Number(b.numero)||0) - (Number(a.numero)||0));
+  list.sort((a,b)=>(b.createdAt||b.date||"").localeCompare(a.createdAt||a.date||"") || (Number(b.numero)||0)-(Number(a.numero)||0));
 
   const columns = [
     {label:"Reçu", width:55}, {label:"Élève", width:130}, {label:"Classe", width:110},
@@ -3470,7 +3494,7 @@ function downloadPaymentsListPdf(){
   const rows = list.map(p => {
     const el = d.eleves.find(e=>e.id===p.eleveId);
     return [
-      receiptNumber(p.numero||0),
+      receiptCode(p),
       el ? `${el.nom} ${el.postnom}` : "—",
       el ? classeOptionLabel(el) : "",
       "T"+p.trimestre,
@@ -3539,7 +3563,7 @@ function downloadRecouvrementPdf(){
 
 function receiptCardHtml(d, payment, compact){
   const el = d.eleves.find(e=>e.id===payment.eleveId);
-  const numero = receiptNumber(payment.numero || 0);
+  const numero = receiptCode(payment);
   const logoSize = compact ? 32 : 52;
   const pad = compact ? "12px" : "24px";
   const titleSize = compact ? "13px" : "18px";
@@ -4727,9 +4751,10 @@ function viewUtilisateurs(){
     </div></div>
 
     <div class="table-wrap"><table>
-      <thead><tr><th>E-mail</th><th>Rôle</th></tr></thead>
-      <tbody><tr><td>${esc(getCurrentUser())}</td><td style="opacity:.7;">${estAdmin ? "Administrateur" : "Enseignant"}</td></tr></tbody>
+      <thead><tr><th>E-mail</th><th>Rôle</th><th>Code reçu</th></tr></thead>
+      <tbody><tr><td>${esc(getCurrentUser())}</td><td style="opacity:.7;">${estAdmin ? "Administrateur" : "Enseignant"}</td><td style="opacity:.7;">${esc(state.currentRecuCode||"—")}</td></tr></tbody>
     </table></div>
+    <div style="font-size:11.5px;opacity:.6;margin-top:-10px;margin-bottom:16px;">Préfixe utilisé sur vos reçus (ex. ${esc(state.currentRecuCode||"RN")}-0014), pour qu'aucun numéro ne se répète entre enseignants. Non défini dans votre profil ? Un code est déduit automatiquement de votre e-mail.</div>
 
     <div class="form-card">
       <div class="form-title">Changer mon mot de passe</div>
@@ -4746,7 +4771,7 @@ function viewUtilisateurs(){
         La création de comptes se fait pour l'instant depuis la console Firebase (par mesure de sécurité) :<br>
         1. Firebase Console → Authentication → Ajouter un utilisateur (e-mail + mot de passe provisoire).<br>
         2. Copiez son identifiant (UID).<br>
-        3. Firestore Database → Données → collection <code>users</code> → nouveau document avec cet UID, contenant <code>ecoleId: "nguizani"</code> et <code>role: "Enseignant"</code> (ou <code>"Admin"</code>).
+        3. Firestore Database → Données → collection <code>users</code> → nouveau document avec cet UID, contenant <code>ecoleId: "nguizani"</code>, <code>role: "Enseignant"</code> (ou <code>"Admin"</code>), et <code>codeRecu: "XX"</code> (2-3 lettres, pour distinguer ses reçus — sinon un code est déduit automatiquement de son e-mail).
       </div>
     </div>` : ""}
   `;
@@ -4794,6 +4819,7 @@ async function initApp(user){
   state.currentUserUid = user.uid;
   state.currentRole = (profil.role || "").trim();
   state.currentEcoleId = profil.ecoleId || "";
+  state.currentRecuCode = (profil.codeRecu || deriveRecuCode(user.email)).toUpperCase();
 
   if(!state.currentEcoleId){
     renderAuthScreen("login", "Votre compte n'est associé à aucune école. Contactez l'administrateur.");
