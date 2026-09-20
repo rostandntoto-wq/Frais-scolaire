@@ -77,6 +77,10 @@
   html[data-theme="dark"] .receipt-cell{ border-color:#444; }
   *{box-sizing:border-box;}
   button{color:inherit;font:inherit;}
+  .splash-loader{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;height:100vh;width:100%;background:var(--paper);color:var(--ink);}
+  .spinner{width:38px;height:38px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--ink);animation:splash-spin .8s linear infinite;}
+  .splash-text{font-family:Georgia,serif;font-size:14px;opacity:.75;}
+  @keyframes splash-spin{ to{ transform:rotate(360deg); } }
   body{
     margin:0;
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
@@ -257,7 +261,7 @@
 </head>
 <body>
 
-<div id="app"></div>
+<div id="app"><div class="splash-loader"><div class="spinner"></div><div class="splash-text">Chargement…</div></div></div>
 <div id="print-area"></div>
 <input type="file" id="import-input" accept=".xlsx,.xls,.xml,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/xml,application/json" style="display:none;">
 <input type="file" id="import-eleves-input" accept=".xlsx,.xls,.xml,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/xml,text/csv" style="display:none;">
@@ -4846,10 +4850,7 @@ async function initApp(user){
     return;
   }
 
-  document.getElementById("app").innerHTML = `
-    <div class="auth-page"><div class="auth-card"><div class="auth-right" style="width:100%;"><div class="auth-right-inner">
-      <div style="font-family:Georgia,serif;font-size:18px;font-weight:bold;color:var(--ink);">Chargement des données de l'école…</div>
-    </div></div></div></div>`;
+  document.getElementById("app").innerHTML = `<div class="splash-loader"><div class="spinner"></div><div class="splash-text">Chargement des données de l'école…</div></div>`;
 
   let statut;
   try{
