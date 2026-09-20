@@ -76,6 +76,7 @@
   html[data-theme="dark"] .auth-footer{ color:#8b93a8; }
   html[data-theme="dark"] .receipt-cell{ border-color:#444; }
   *{box-sizing:border-box;}
+  button{color:inherit;font:inherit;}
   body{
     margin:0;
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
@@ -160,7 +161,7 @@
   /* --- cards / stats --- */
   .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:36px;}
   @media(min-width:640px){ .stats-grid{grid-template-columns:repeat(4,1fr);} }
-  .stat-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;}
+  .stat-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;color:var(--ink);text-decoration:none;}
   .stat-value{font-family:Georgia,serif;font-size:24px;font-weight:600;}
   .stat-label{font-size:12px;opacity:.6;margin-top:4px;}
   .stat-icon-badge{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:17px;color:white;flex-shrink:0;}
