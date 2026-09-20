@@ -346,7 +346,7 @@ const LOGIN_BG_DATA = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA
 const STORAGE_KEY = "suivi-frais-scolaires-v1";
 
 /* ---------------- Version de l'application & mécanisme de mise à jour ---------------- */
-const APP_VERSION = "2.1.0";
+const APP_VERSION = "2.1.1";
 // Numéro affiché en bas de la page de connexion ("Besoin d'assistance ?").
 // Modifiez cette valeur avec votre numéro réel (appel + WhatsApp).
 const SUPPORT_PHONE = "+243 89 35 15 119";
@@ -530,11 +530,67 @@ async function syncFirestoreCollection(colRef, currentArray, lastSyncedMap){
 // est encore vide pour cette école ET que cet appareil a déjà des données
 // réelles en local (cas de l'appareil historique de l'école), on les
 // pousse une bonne fois vers le cloud pour amorcer la synchronisation.
+// Petit utilitaire : s'abonne à une collection/document et résout une
+// promesse dès la PREMIÈRE réponse (locale ou serveur), tout en laissant
+// l'écoute active pour les mises à jour suivantes (onUpdate). Avant cette
+// version, l'appli faisait un .get() PUIS un onSnapshot séparé pour la même
+// donnée — deux lectures facturées pour le même résultat. Un seul
+// abonnement suffit : sa première réponse sert de chargement initial.
+function ecouterAvecPremierChargement(ref, onUpdate){
+  return new Promise((resolve, reject) => {
+    let premiereFois = true;
+    ref.onSnapshot(snap => {
+      if(premiereFois){ premiereFois = false; resolve(snap); }
+      else if(onUpdate) onUpdate(snap);
+    }, reject);
+  });
+}
+
 async function loadFromFirestore(ecoleId){
+  // Si les écoutes sont déjà actives (ex. Firebase redéclenche l'état de
+  // connexion pour rafraîchir le jeton, en cours de session), les données
+  // sont déjà chargées et tenues à jour en continu — inutile de tout
+  // relire une seconde fois.
+  if(firestoreListenersActifs) return "ok";
+  firestoreListenersActifs = true;
+
   const db = firebase.firestore();
   const ecoleRef = db.collection("ecoles").doc(ecoleId);
+  const enSaisie = () => {
+    const a = document.activeElement;
+    return a && (a.tagName==="INPUT" || a.tagName==="TEXTAREA" || a.tagName==="SELECT");
+  };
+
   const [ecoleSnap, elevesSnap, paiementsSnap, archivesSnap] = await Promise.all([
-    ecoleRef.get(), ecoleRef.collection("eleves").get(), ecoleRef.collection("paiements").get(), ecoleRef.collection("archives").get()
+    ecouterAvecPremierChargement(ecoleRef, snap => {
+      if(!snap.exists) return;
+      const d = snap.data();
+      if(d.ecole) state.data.ecole = { ...state.data.ecole, ...d.ecole };
+      if(d.bareme) state.data.bareme = d.bareme;
+      if(d.journal) state.data.journal = d.journal;
+      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); }catch(e){}
+      if(!enSaisie()) renderView();
+    }),
+    ecouterAvecPremierChargement(ecoleRef.collection("eleves"), snap => {
+      state.data.eleves = snap.docs.map(d=>d.data());
+      lastSyncedEleves = new Map(state.data.eleves.map(e=>[e.id, JSON.stringify(e)]));
+      eleveDupIndexArr = null;
+      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); }catch(e){}
+      if(!enSaisie()) renderView();
+    }),
+    ecouterAvecPremierChargement(ecoleRef.collection("paiements"), snap => {
+      state.data.paiements = snap.docs.map(d=>d.data());
+      lastSyncedPaiements = new Map(state.data.paiements.map(p=>[p.id, JSON.stringify(p)]));
+      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); }catch(e){}
+      if(!enSaisie()) renderView();
+    }),
+    ecouterAvecPremierChargement(ecoleRef.collection("archives"), snap => {
+      const archives = {};
+      snap.docs.forEach(d => { archives[d.id] = d.data(); });
+      state.data.archives = archives;
+      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); }catch(e){}
+      if(!enSaisie()) renderView();
+    }),
   ]);
 
   // Licence : chaque école a une date d'expiration (un an, en général),
@@ -600,42 +656,6 @@ async function loadFromFirestore(ecoleId){
     state.data.ecole._ecoleId = ecoleId;
   }
 
-  if(!firestoreListenersActifs){
-    firestoreListenersActifs = true;
-    const enSaisie = () => {
-      const a = document.activeElement;
-      return a && (a.tagName==="INPUT" || a.tagName==="TEXTAREA" || a.tagName==="SELECT");
-    };
-    ecoleRef.onSnapshot(snap => {
-      if(!snap.exists) return;
-      const d = snap.data();
-      if(d.ecole) state.data.ecole = { ...state.data.ecole, ...d.ecole };
-      if(d.bareme) state.data.bareme = d.bareme;
-      if(d.journal) state.data.journal = d.journal;
-      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); }catch(e){}
-      if(!enSaisie()) renderView();
-    });
-    ecoleRef.collection("archives").onSnapshot(snap => {
-      const archives = {};
-      snap.docs.forEach(d => { archives[d.id] = d.data(); });
-      state.data.archives = archives;
-      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); }catch(e){}
-      if(!enSaisie()) renderView();
-    });
-    ecoleRef.collection("eleves").onSnapshot(snap => {
-      state.data.eleves = snap.docs.map(d=>d.data());
-      lastSyncedEleves = new Map(state.data.eleves.map(e=>[e.id, JSON.stringify(e)]));
-      eleveDupIndexArr = null;
-      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); }catch(e){}
-      if(!enSaisie()) renderView();
-    });
-    ecoleRef.collection("paiements").onSnapshot(snap => {
-      state.data.paiements = snap.docs.map(d=>d.data());
-      lastSyncedPaiements = new Map(state.data.paiements.map(p=>[p.id, JSON.stringify(p)]));
-      try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data)); }catch(e){}
-      if(!enSaisie()) renderView();
-    });
-  }
   return "ok";
 }
 
