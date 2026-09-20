@@ -250,6 +250,7 @@
   .auth-support{text-align:center;font-size:12px;padding:10px 16px 18px;color:#6b7280;}
 </style>
 <!-- Firebase (test de connexion — étape 4) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
@@ -1080,16 +1081,16 @@ function showModal({title, message, confirmLabel="Confirmer", cancelLabel="Annul
     overlay.style.cssText = "position:fixed;inset:0;background:rgba(30,42,74,0.55);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px;";
 
     const box = document.createElement("div");
-    box.style.cssText = "background:var(--card);border-radius:12px;max-width:440px;width:100%;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,0.35);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;";
+    box.style.cssText = "background:var(--card);color:var(--ink);border-radius:12px;max-width:440px;width:100%;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,0.35);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;";
 
     const titleEl = document.createElement("div");
-    titleEl.style.cssText = `font-family:Georgia,serif;font-size:18px;font-weight:bold;color:${danger?"#A6432E":"#1E2A4A"};margin-bottom:10px;`;
+    titleEl.style.cssText = `font-family:Georgia,serif;font-size:18px;font-weight:bold;color:${danger?"var(--late)":"var(--ink)"};margin-bottom:10px;`;
     titleEl.textContent = title || (danger ? "⚠️ Attention" : "Registre des frais scolaires");
     box.appendChild(titleEl);
 
     if(message){
       const msgEl = document.createElement("div");
-      msgEl.style.cssText = "font-size:13px;color:#333;line-height:1.6;white-space:pre-line;margin-bottom:16px;";
+      msgEl.style.cssText = "font-size:13px;color:var(--ink);opacity:.85;line-height:1.6;white-space:pre-line;margin-bottom:16px;";
       msgEl.textContent = message;
       box.appendChild(msgEl);
     }
@@ -1097,13 +1098,13 @@ function showModal({title, message, confirmLabel="Confirmer", cancelLabel="Annul
     let inputEl = null;
     if(input){
       const label = document.createElement("div");
-      label.style.cssText = "font-size:12px;color:#555;margin-bottom:6px;";
+      label.style.cssText = "font-size:12px;color:var(--ink);opacity:.7;margin-bottom:6px;";
       label.textContent = input.label || "Veuillez préciser le motif de cette opération (amende si nécessaire)";
       box.appendChild(label);
       inputEl = document.createElement("input");
       inputEl.value = input.defaultValue || "";
       inputEl.placeholder = input.placeholder || "";
-      inputEl.style.cssText = "width:100%;padding:8px 10px;border:1px solid #DDD2B4;border-radius:6px;font-size:13px;margin-bottom:16px;box-sizing:border-box;outline:none;";
+      inputEl.style.cssText = "width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;margin-bottom:16px;box-sizing:border-box;outline:none;background:var(--paper);color:var(--ink);";
       box.appendChild(inputEl);
     }
 
@@ -1112,7 +1113,7 @@ function showModal({title, message, confirmLabel="Confirmer", cancelLabel="Annul
 
     const cancelBtn = document.createElement("button");
     cancelBtn.textContent = cancelLabel;
-    cancelBtn.style.cssText = "padding:9px 16px;border-radius:7px;border:1px solid #DDD2B4;background:var(--card);color:#1E2A4A;font-size:13px;cursor:pointer;";
+    cancelBtn.style.cssText = "padding:9px 16px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:13px;cursor:pointer;";
 
     const confirmBtn = document.createElement("button");
     confirmBtn.textContent = confirmLabel;
@@ -1578,13 +1579,15 @@ async function showHelp(){
     alertOnly: true,
     confirmLabel: "Fermer",
     message:
-      "• Paiements : enregistrez un versement, imprimez ou téléchargez un reçu.\n" +
+      "• Élèves : ajoutez, modifiez ou archivez un élève, avec sa classe et son option du barème.\n" +
+      "• Paiements : enregistrez un versement, imprimez ou téléchargez un reçu, clôturez la caisse du jour.\n" +
       "• Tableau de bord : vue d'ensemble par trimestre, recouvrement par classe.\n" +
       "• Débiteurs : liste des élèves en retard de paiement.\n" +
-      "• Connectivité (Excel) : lier, exporter ou importer votre classeur.\n" +
-      "• Sauvegardes : instantanés automatiques en cas de problème.\n" +
-      "• Journal d'activité : historique de toutes les actions, avec auteur et heure.\n\n" +
-      "En cas de doute, votre saisie n'est jamais perdue : tant que vous ne quittez pas la page, elle reste enregistrée."
+      "• Barème : tarifs par option ou par classe selon le mode choisi.\n" +
+      "• Journal d'activité : historique de toutes les actions, avec auteur et heure.\n" +
+      "• Utilisateurs : gérez qui a accès au registre et avec quel rôle.\n\n" +
+      "Vos données sont synchronisées automatiquement — plusieurs enseignants peuvent travailler en même temps, sur des appareils différents.\n\n" +
+      "Besoin d'aide supplémentaire ? 📞 " + SUPPORT_PHONE + " (WhatsApp disponible sur ce même numéro)."
   });
 }
 
@@ -2345,6 +2348,8 @@ function printRecettes(){
 /* ---------------- Barème ---------------- */
 function viewBareme(){
   const d = state.data;
+  const modeClasse = d.ecole.baremeMode === "classe";
+  const libColonne = modeClasse ? "Classe" : "Option";
   const rows = d.bareme.map(r => `
     <tr>
       <td style="font-weight:600;max-width:150px;overflow-wrap:break-word;">${esc(r.option)}</td>
@@ -2361,22 +2366,37 @@ function viewBareme(){
     <div class="title-row"><div>
       <div class="eyebrow">Configuration</div>
       <h1 class="serif">Barème des frais</h1>
-      <p class="subtitle">Un tarif par option, pour chaque trimestre. Le tarif enseignant (50%) reste modifiable.</p>
+      <p class="subtitle">Un tarif par ${modeClasse ? "classe" : "option"}, pour chaque trimestre. Le tarif enseignant (50%) reste modifiable.</p>
     </div></div>
 
-    ${d.bareme.length===0 ? emptyState("📘","Aucune option définie","Ajoutez une première option ci-dessous.") : `
+    <div class="form-card">
+      <div class="form-title">Les frais varient selon...</div>
+      <div class="form-row">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+          <input type="radio" name="bareme-mode" value="option" ${!modeClasse?"checked":""} onchange="setBaremeMode('option')">
+          Une option abrégée (ex : CG, HP) — plusieurs classes peuvent la partager
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+          <input type="radio" name="bareme-mode" value="classe" ${modeClasse?"checked":""} onchange="setBaremeMode('classe')">
+          Chaque classe a son propre tarif (ex : 1ère, 2ème...)
+        </label>
+      </div>
+      <div style="font-size:11.5px;opacity:.6;margin-top:8px;">À choisir selon votre école : une école privée facture souvent classe par classe, une école publique par option commune à plusieurs classes.</div>
+    </div>
+
+    ${d.bareme.length===0 ? emptyState("📘","Aucune "+libColonne.toLowerCase()+" définie","Ajoutez-en une première ci-dessous.") : `
     <div class="table-wrap"><table>
       <thead><tr>
-        <th>Option</th><th class="right">T1</th><th class="right">T2</th><th class="right">T3</th>
+        <th>${libColonne}</th><th class="right">T1</th><th class="right">T2</th><th class="right">T3</th>
         <th class="right" style="color:var(--gold);">Ens. T1</th><th class="right" style="color:var(--gold);">Ens. T2</th><th class="right" style="color:var(--gold);">Ens. T3</th><th></th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`}
 
     <div class="form-card">
-      <div class="form-title">Ajouter une option</div>
+      <div class="form-title">Ajouter ${modeClasse ? "une classe" : "une option"}</div>
       <div class="form-row">
-        <div class="field wide"><label>Option</label><input id="nb-option" placeholder="ex : CTEB"></div>
+        <div class="field wide"><label>${libColonne}</label><input id="nb-option" placeholder="${modeClasse?'ex : 2ème':'ex : CTEB'}"></div>
         <div class="field"><label>Tarif T1</label><input id="nb-t1" type="number"></div>
         <div class="field"><label>Tarif T2</label><input id="nb-t2" type="number"></div>
         <div class="field"><label>Tarif T3</label><input id="nb-t3" type="number"></div>
@@ -2384,6 +2404,12 @@ function viewBareme(){
       </div>
     </div>
   `;
+}
+
+function setBaremeMode(mode){
+  state.data.ecole.baremeMode = mode;
+  journalAdd("Mode de barème", mode === "classe" ? "Par classe" : "Par option");
+  saveData(); renderView();
 }
 
 function updateBareme(id, field, value){
@@ -2492,7 +2518,7 @@ function viewEleves(){
     <div class="form-card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
       <div>
         <div class="form-title" style="margin-bottom:2px;">Importer une liste d'élèves</div>
-        <div style="font-size:12px;opacity:.6;">Fichier .csv ou .xls avec les colonnes Nom, Post-nom, Prénom, Sexe, Classe, Option, Statut</div>
+        <div style="font-size:12px;opacity:.6;">Fichier Excel (.xlsx, .xls) ou .csv, avec les colonnes Nom, Post-nom, Prénom, Sexe, Classe, Option, Statut</div>
       </div>
       <button class="btn" onclick="document.getElementById('import-eleves-input').click()">📥 Importer une liste</button>
     </div>
@@ -2504,11 +2530,12 @@ function viewEleves(){
         <div class="field"><label>Post-nom</label><input id="ne-postnom" class="name"></div>
         <div class="field"><label>Prénom</label><input id="ne-prenom" class="name"></div>
         <div class="field"><label>Sexe</label><select id="ne-sexe"><option value="M">M</option><option value="F">F</option></select></div>
-        <div class="field"><label>Classe</label><input id="ne-classe" list="ne-classes-list" placeholder="ex : 2ème"></div>
-        <datalist id="ne-classes-list">${[...new Set(d.eleves.map(e=>e.classe).filter(Boolean))].map(c=>`<option value="${esc(c)}"></option>`).join("")}</datalist>
-        <div class="field"><label>Option (barème)</label>
-          <select id="ne-option"><option value="">—</option>${d.bareme.map(b=>`<option value="${esc(b.option)}">${esc(b.option)}</option>`).join("")}</select>
-        </div>
+        <div class="field"><label>Classe</label>${
+          (d.ecole.baremeMode === "classe")
+          ? `<select id="ne-classe"><option value="">—</option>${d.bareme.map(b=>`<option value="${esc(b.option)}">${esc(b.option)}</option>`).join("")}</select>`
+          : `<input id="ne-classe" list="ne-classes-list" placeholder="ex : 2ème CG">
+             <datalist id="ne-classes-list">${[...new Set(d.eleves.map(e=>classeOptionLabel(e)).filter(Boolean))].map(c=>`<option value="${esc(c)}"></option>`).join("")}</datalist>`
+        }</div>
         <div class="field"><label>Statut</label><select id="ne-statut"><option>Normal</option><option>Enfant enseignant</option></select></div>
         <button class="btn" onclick="addEleve()">➕ Ajouter</button>
       </div>
@@ -2634,15 +2661,20 @@ function parseClasseComboInput(text, bareme){
 
 async function addEleve(){
   const nom = document.getElementById("ne-nom").value.trim();
-  const classe = document.getElementById("ne-classe").value.trim();
-  const option = document.getElementById("ne-option").value;
+  const modeClasse = state.data.ecole.baremeMode === "classe";
+  const saisie = document.getElementById("ne-classe").value.trim();
+  const { classe, option } = modeClasse
+    ? { classe: saisie, option: saisie }
+    : parseClasseComboInput(saisie, state.data.bareme);
   const postnom = document.getElementById("ne-postnom").value.trim();
   const prenom = document.getElementById("ne-prenom").value.trim();
   if(!nom || !classe) return;
   if(!option){
     const continuer = await showConfirm(
-      `Aucune option du barème n'a été choisie pour \u00ab ${classe} \u00bb.\n\nL'élève sera ajouté sans option de tarification — ses frais ne pourront pas être calculés tant qu'une option valide n'est pas sélectionnée.\n\nContinuer quand même ?`,
-      {title:"⚠️ Option manquante", confirmLabel:"Ajouter quand même"}
+      modeClasse
+        ? `Veuillez choisir une classe dans la liste.`
+        : `\u00ab ${classe} \u00bb ne correspond à aucune option du barème connue (ex : CG, HP, CTEB...).\n\nL'élève sera ajouté sans option de tarification — ses frais ne pourront pas être calculés tant qu'une classe valide n'est pas choisie.\n\nContinuer quand même ?`,
+      {title:"⚠️ Classe non reconnue", confirmLabel:"Ajouter quand même"}
     );
     if(!continuer) return;
   }
@@ -2737,23 +2769,17 @@ document.getElementById("import-eleves-input").addEventListener("change", e => {
     try{
       const bytes = new Uint8Array(reader.result);
       let nouveaux = null;
-      let etaitXlsxCompresse = false;
 
-      if(bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4B){ // .xlsx (ZIP)
-        // Cette lecture "classeur" ne comprend que le format ZIP non compressé
-        // ("stored") généré par l'application elle-même — voir la note sur
-        // buildZip/unzipStored. Un fichier .xlsx enregistré depuis un vrai
-        // Excel/LibreOffice est presque toujours compressé et ne peut pas être
-        // lu directement : on le détecte pour guider l'utilisateur vers le
-        // CSV plutôt que d'afficher une erreur générique peu compréhensible.
-        let result;
+      if(bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4B){ // .xlsx (ZIP) : vrai classeur Excel
         try{
-          result = await parseXlsxWorkbook(bytes);
+          const wb = XLSX.read(bytes, { type: "array" });
+          const nomFeuille = wb.SheetNames.includes("Élèves") ? "Élèves" : wb.SheetNames[0];
+          const feuille = wb.Sheets[nomFeuille];
+          const rows = XLSX.utils.sheet_to_json(feuille, { header: 1, raw: false, defval: "" });
+          nouveaux = rows.length ? rowsToEleves(rows) : null;
         }catch(err){
-          result = null;
+          nouveaux = null;
         }
-        if(result && result.error === "compressed") etaitXlsxCompresse = true;
-        nouveaux = (result && result.eleves && result.eleves.length) ? result.eleves.map(e => ({...e, id: uid("el")})) : null;
       } else {
         const text = new TextDecoder("utf-8").decode(bytes);
         if(text.indexOf("<?xml") === 0 || text.indexOf("<Workbook") !== -1){
@@ -2768,15 +2794,7 @@ document.getElementById("import-eleves-input").addEventListener("change", e => {
       }
 
       if(!nouveaux){
-        if(etaitXlsxCompresse){
-          await showAlert(
-            "Ce fichier .xlsx est dans le format Excel standard (compressé), que cette application ne peut pas lire directement.\n\n" +
-            "Solution : dans Excel, faites \u00ab Fichier > Enregistrer sous \u00bb et choisissez le format CSV (séparateur point-virgule ou virgule), puis réessayez l'import avec ce fichier .csv.\n\n" +
-            "Colonnes attendues : Nom, Post-nom, Prénom, Sexe, Classe, Option, Statut."
-          );
-        } else {
-          await showAlert("Fichier non reconnu. Colonnes attendues : Nom, Post-nom, Prénom, Sexe, Classe, Option, Statut.\n\nAstuce : le format CSV (Fichier > Enregistrer sous > CSV dans Excel) est le plus fiable pour l'import.");
-        }
+        await showAlert("Fichier non reconnu ou colonnes manquantes. Colonnes attendues : Nom, Post-nom, Prénom, Sexe, Classe, Option, Statut (dans une feuille nommée \u00ab Élèves \u00bb si le classeur en contient plusieurs).\n\nLe CSV (Fichier > Enregistrer sous > CSV dans Excel) reste une valeur sûre en cas de souci.");
         e.target.value = "";
         return;
       }
@@ -4425,7 +4443,7 @@ function authScreenHtml(mode, error){
       <div class="auth-footer">
         <div>${authIcon("shield",16)} Registre des frais scolaires · Version ${APP_VERSION}</div>
         <div>${authIcon("clock",16)} Année scolaire ${esc(anneeScolaire)}</div>
-        <div>${authIcon("cloud",16)} Stockage local — vos données restent sur cet appareil</div>
+        <div>${authIcon("cloud",16)} Données synchronisées et sauvegardées dans le cloud</div>
       </div>
       <div class="auth-support">Besoin d'assistance ? 📞 ${esc(SUPPORT_PHONE)} · WhatsApp disponible sur ce même numéro</div>
     </div>
