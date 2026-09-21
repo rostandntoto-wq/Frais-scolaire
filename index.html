@@ -20,8 +20,8 @@
     var manifest = {
       name: "Registre des frais scolaires",
       short_name: "Frais scolaires",
-      start_url: "./index.html",
-      scope: "./",
+      start_url: new URL("./index.html", location.href).href,
+      scope: new URL("./", location.href).href,
       display: "standalone",
       background_color: "#F5F1E6",
       theme_color: "#1E2A4A",
